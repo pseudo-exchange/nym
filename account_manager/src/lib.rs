@@ -9,18 +9,35 @@ setup_alloc!();
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct AccountManager {
+    owner_pk: Base58PublicKey
+    pk: Base58PublicKey
 }
 
+// TODO: AccountManager
+// This contract gets deployed by escrow.nym.near
+// Has a function to revert control back to original owner
+// Has a function to change owner, callable ONLY by escrow.nym.near
 #[near_bindgen]
 impl AccountManager {
-    pub fn new() -> Self {
-        AccountManager {}
+    pub fn new(escrow_pk: Base58PublicKey, original_owner_pk: Base58PublicKey) -> Self {
+        AccountManager {
+            owner_pk: original_owner_pk,
+            pk: escrow_pk
+        }
     }
 
-    pub fn thang(&self) -> String {
-        let msg = "hiii";
-        log!("{}", &msg);
-        (&msg).to_string()
+    pub fn revert_ownership(&mut self) -> Promise {
+        // TODO: Add asserts
+        Promise::new(env::current_account_id)
+            .add_full_access_key(original_owner_pk.into())
+            .delete_key(&self.pk)
+    }
+
+    pub fn transfer_ownership(&mut self, new_owner_pk: Base58PublicKey) -> Promise {
+        // TODO: Add asserts
+        Promise::new(env::current_account_id)
+            .add_full_access_key(new_owner_pk.into())
+            .delete_key(&self.pk)
     }
 }
 
