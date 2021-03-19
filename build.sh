@@ -1,5 +1,13 @@
 #!/bin/bash
 set -e
+
+if [ -d "res" ]; then
+  echo ""
+else
+  mkdir res
+  exit 1
+fi
+
 cd "`dirname $0`"
 
 if [ -z "$KEEP_NAMES" ]; then

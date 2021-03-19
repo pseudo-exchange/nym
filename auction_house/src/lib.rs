@@ -1,11 +1,11 @@
-use borsh::{BorshDeserialize, BorshSerialize};
-use near_sdk::collections::UnorderedMap;
-use near_sdk::json_types::Base58PublicKey;
-use near_sdk::{env, near_bindgen, AccountId, Balance, BlockHeight, Promise};
-mod util;
+use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::json_types::{Base58PublicKey};
+use near_sdk::collections::{UnorderedMap};
+use near_sdk::{
+    env, log, near_bindgen, setup_alloc, AccountId, Balance, BlockHeight, Promise, PanicOnDefault,
+};
 
-#[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+setup_alloc!();
 
 pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
 const ACCESS_KEY_ALLOWANCE: u128 = 1_000_000_000_000_000_000_000;
@@ -31,10 +31,10 @@ fn transfer_ownership(
     to_account_id: AccountId,
 ) -> Promise {
     // TODO: Remove once fully tested
-    logger!("from_account_id: {:?}", &from_account_id);
-    logger!("from_public_key: {:?}", &from_public_key);
-    logger!("to_public_key: {:?}", &to_public_key);
-    logger!("to_account_id: {:?}", &to_account_id);
+    log!("from_account_id: {:?}", &from_account_id);
+    log!("from_public_key: {:?}", &from_public_key);
+    log!("to_public_key: {:?}", &to_public_key);
+    log!("to_account_id: {:?}", &to_account_id);
 
     // Here be the magix
     // First grant all access keys to the escrow account
@@ -46,6 +46,14 @@ fn transfer_ownership(
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize)]
+pub struct AuctionHouse {
+    pub auctions: UnorderedMap<String, Auction>,
+    pub paused: bool,
+    pub escrow_account_id: Option<AccountId>,
+    pub escrow_public_key: Option<Base58PublicKey>,
+}
+
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Auction {
     pub owner_id: AccountId, // near account
     pub winner_account_id: Option<AccountId>,
@@ -63,14 +71,6 @@ impl ToString for Auction {
         ];
         fields.join("")
     }
-}
-
-#[derive(BorshDeserialize, BorshSerialize)]
-pub struct AuctionHouse {
-    pub auctions: UnorderedMap<String, Auction>,
-    pub paused: bool,
-    pub escrow_account_id: Option<AccountId>,
-    pub escrow_public_key: Option<Base58PublicKey>,
 }
 
 impl Default for AuctionHouse {
@@ -138,7 +138,7 @@ impl AuctionHouse {
             close_block: Some(close_block),
             bids: UnorderedMap::new(env::keccak256(env::block_index().to_string().as_bytes())),
         };
-        logger!("auction string: {}", &auction.to_string());
+        log!("auction string: {}", &auction.to_string());
         // Convert our auction to a string & compute the keccak256 hash
         let hash = env::keccak256(&auction.to_string().as_bytes());
 
@@ -160,7 +160,7 @@ impl AuctionHouse {
         self.auctions.insert(&key.join(""), &auction);
 
         // Use our fancy Macro, because KA CHING!
-        logger!("New Auction:{}", &key.join(""));
+        log!("New Auction:{}", &key.join(""));
 
         // Transfer ownership from ALL previous keys, to the escrow account
         transfer_ownership(
@@ -270,7 +270,7 @@ impl AuctionHouse {
     // NOTE: anyone can call this method, as it is paid by the person wanting the final outcome
     pub fn finalize_auction(&mut self, auction_id: String) {
         // TBD!!!!!
-        logger!("{}", auction_id);
+        log!("{}", auction_id);
 
         // TODO:
         // // Transfer ownership from escrow account, to the new owner account
