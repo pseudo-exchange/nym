@@ -17,6 +17,7 @@ pub struct Escrow {
 // should not be owned by anyone
 #[near_bindgen]
 impl Escrow {
+    #[init]
     pub fn new() -> Self {
         Escrow {}
     }

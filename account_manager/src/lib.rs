@@ -1,7 +1,7 @@
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-// use near_sdk::json_types::{ValidAccountId};
+use near_sdk::json_types::{Base58PublicKey};
 use near_sdk::{
-    log, near_bindgen, setup_alloc, PanicOnDefault,
+    env, Promise, near_bindgen, setup_alloc, PanicOnDefault, PublicKey
 };
 
 setup_alloc!();
@@ -9,8 +9,8 @@ setup_alloc!();
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct AccountManager {
-    owner_pk: Base58PublicKey
-    pk: Base58PublicKey
+    owner_pk: PublicKey,
+    pk: PublicKey
 }
 
 // TODO: AccountManager
@@ -19,25 +19,26 @@ pub struct AccountManager {
 // Has a function to change owner, callable ONLY by escrow.nym.near
 #[near_bindgen]
 impl AccountManager {
+    #[init]
     pub fn new(escrow_pk: Base58PublicKey, original_owner_pk: Base58PublicKey) -> Self {
         AccountManager {
-            owner_pk: original_owner_pk,
-            pk: escrow_pk
+            owner_pk: original_owner_pk.into(),
+            pk: escrow_pk.into()
         }
     }
 
     pub fn revert_ownership(&mut self) -> Promise {
         // TODO: Add asserts
-        Promise::new(env::current_account_id)
-            .add_full_access_key(original_owner_pk.into())
-            .delete_key(&self.pk)
+        Promise::new(env::current_account_id())
+            .add_full_access_key(self.owner_pk)
+            .delete_key(self.pk)
     }
 
     pub fn transfer_ownership(&mut self, new_owner_pk: Base58PublicKey) -> Promise {
         // TODO: Add asserts
-        Promise::new(env::current_account_id)
+        Promise::new(env::current_account_id())
             .add_full_access_key(new_owner_pk.into())
-            .delete_key(&self.pk)
+            .delete_key(self.pk)
     }
 }
 
