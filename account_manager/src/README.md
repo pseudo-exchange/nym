@@ -52,7 +52,7 @@ Requires [near cli]()
 
 ```bash
 # Init
-near call 
+near deploy --wasmFile res/account_manager.wasm --initFunction new --initArgs '{"escrow_pk": "ed25591:PK_HERE", "escrow_account_id": "account_to_transfer.testnet", "original_owner_pk": "ed25591:PK_HERE"}' --accountId escrow_account.testnet
 
 # transfer ownership
 near call _account_here_ transfer_ownership '{"new_owner_pk": "ed25591:PK_HERE"}' --accountId youraccount.testnet

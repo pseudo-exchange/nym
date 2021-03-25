@@ -24,7 +24,11 @@ impl AccountManager {
     /// All funds and previous ownership MUST be removed before escrow can validate
     /// the account is available for any other ownership transfers
     #[init]
-    pub fn new(escrow_pk: Base58PublicKey, escrow_account_id: ValidAccountId, original_owner_pk: Base58PublicKey) -> Self {
+    pub fn new(
+        escrow_pk: Base58PublicKey,
+        escrow_account_id: ValidAccountId,
+        original_owner_pk: Base58PublicKey
+    ) -> Self {
         assert_ne!(env::signer_account_id(), env::current_account_id(), "Cannot sign against current account");
         assert_ne!(&escrow_pk, &original_owner_pk, "Cannot use same keys");
 
@@ -60,10 +64,11 @@ impl AccountManager {
     /// the account, only having a single key for ownership
     pub fn remove_key(&mut self, remove_key: Base58PublicKey) -> Promise {
         assert_eq!(env::predecessor_account_id(), self.escrow_account_id.to_string(), "Unauthorized access, escrow only");
-        assert_ne!(remove_key.to_owned(), self.pk, "Cannot remove escrow");
+        let rmky = remove_key.into();
+        assert_ne!(rmky, self.pk, "Cannot remove escrow");
 
         Promise::new(env::current_account_id())
-            .delete_key(remove_key.into())
+            .delete_key(rmky)
     }
 
     // TODO: Deploy a new contract over this one to complete the transfer of ownership?
