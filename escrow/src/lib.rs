@@ -11,8 +11,13 @@ setup_alloc!();
 pub struct Escrow {
 }
 
+// TODO: Escrow
+// Contract keeps track of accounts in escrow
+// is the only account that can execute functions on escrowed account
+// should not be owned by anyone
 #[near_bindgen]
 impl Escrow {
+    #[init]
     pub fn new() -> Self {
         Escrow {}
     }
