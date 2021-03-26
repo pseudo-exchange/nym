@@ -8,42 +8,37 @@ setup_alloc!();
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
-pub struct AccountManager {
+pub struct Deed {
     escrow_account_id: ValidAccountId,
-    owner_pk: PublicKey,
-    pk: PublicKey
+    owner_pk: PublicKey
 }
 
-/// AccountManager
+/// Deed
 /// A deployable contract to an account that needs witness-based access transfer
 #[near_bindgen]
-impl AccountManager {
+impl Deed {
     /// Upon deploy, contract initializes with only escrow account owning this account
     /// All funds and previous ownership MUST be removed before escrow can validate
     /// the account is available for any other ownership transfers
     #[init]
     pub fn new(
-        escrow_pk: PublicKey,
         escrow_account_id: ValidAccountId,
         original_owner_pk: PublicKey
     ) -> Self {
         assert_ne!(env::signer_account_id(), env::current_account_id(), "Cannot sign against current account");
-        assert_ne!(&escrow_pk, &original_owner_pk, "Cannot use same keys");
 
         // Transfer out remaining value?
         let p1 = Promise::new(env::signer_account_id())
             .transfer(env::account_balance());
 
         let p2 = Promise::new(env::current_account_id())
-            .add_full_access_key(escrow_pk.clone().into())
             .delete_key(original_owner_pk.clone().into());
 
         p1.then(p2);
 
-        AccountManager {
+        Deed {
             escrow_account_id,
-            owner_pk: original_owner_pk.into(),
-            pk: escrow_pk.into()
+            owner_pk: original_owner_pk.into()
         }
     }
 
@@ -55,7 +50,6 @@ impl AccountManager {
 
         Promise::new(env::current_account_id())
             .add_full_access_key(self.owner_pk.clone())
-            .delete_key(self.pk.clone())
     }
 
     /// Called only by the escrow contract, this allows the escrow to fully capture
@@ -63,7 +57,6 @@ impl AccountManager {
     pub fn remove_key(&mut self, remove_key: PublicKey) -> Promise {
         assert_eq!(env::predecessor_account_id(), self.escrow_account_id.to_string(), "Unauthorized access, escrow only");
         let rmky = remove_key.into();
-        assert_ne!(rmky, self.pk, "Cannot remove escrow");
 
         Promise::new(env::current_account_id())
             .delete_key(rmky)
@@ -77,7 +70,6 @@ impl AccountManager {
 
         Promise::new(env::current_account_id())
             .add_full_access_key(new_owner_pk.into())
-            .delete_key(self.pk.clone())
     }
 }
 
@@ -91,9 +83,8 @@ mod tests {
 
     use super::*;
 
-    fn create_blank_account_manager(context: VMContextBuilder) -> AccountManager {
-        AccountManager::new(
-            b"ed25519:3tysLvy7KGoE8pznUgXvSHa4vYyGvrDZFcT8jgb8PEQ6".to_vec(),
+    fn create_blank_account_manager(context: VMContextBuilder) -> Deed {
+        Deed::new(
             accounts(1),
             context.context.signer_account_pk
         )
@@ -144,13 +135,12 @@ mod tests {
     }
 
     #[test]
+    // #[should_panic(expected = "Cannot remove escrow")]
     fn test_remove_key() {
         let context = get_context(accounts(1));
         testing_env!(context.build());
         let mut contract = create_blank_account_manager(context);
 
-        contract.remove_key(b"ed25519:BtysLvy7KGoE8pznUgXvSHa4vYyGvrDZFcT8jgb8PEQ6".to_vec());
-
-        assert_eq!(contract.escrow_account_id, accounts(1));
+        contract.remove_key(b"ed25519:AtysLvy7KGoE8pznUgXvSHa4vYyGvrDZFcT8jgb8PEQ6".to_vec());
     }
 }
