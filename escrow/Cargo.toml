@@ -1,6 +1,6 @@
 [package]
 name = "escrow"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Trevor <hello.tjtc.near>"]
 edition = "2018"
 

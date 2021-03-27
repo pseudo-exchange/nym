@@ -40,7 +40,7 @@ pub struct Escrow {
 // should not be owned by anyone -- NO ACCESS KEYS!
 #[near_bindgen]
 impl Escrow {
-    #[init]
+    #[init(ignore_state)]
     pub fn new() -> Self {
         Escrow {
             id: env::current_account_id(),
@@ -51,19 +51,21 @@ impl Escrow {
     /// Responsible for bonding an account to a deed contract, where
     /// escrow is the sole owner, and can only transfer ownership upon
     /// close of title
-    pub fn deed(&mut self, title: ValidAccountId) -> Promise {
+    pub fn deed(&mut self, title: AccountId) -> Promise {
         // Make sure this account isnt already in escrow
-        assert_ne!(self.accounts.contains(&title.to_string()), true, "Account already in escrow");
+        // assert_ne!(self.accounts.contains(&title.to_string()), true, "Account already in escrow");
 
         // add to registry
-        self.accounts.insert(&title.to_string());
+        // self.accounts.insert(&title.to_string());
         log!("New deed: {}", &title);
 
         // deploy deed
-        Promise::new(title.to_string())
+        let p1 = Promise::new(title.clone())
             .deploy_contract(
-                include_bytes!("../../res/account_manager.wasm").to_vec()
-            )
+                include_bytes!("../../res/deed.wasm").to_vec()
+            );
+
+        let p2 = Promise::new(title.to_string())
             .function_call(
                 b"new".to_vec(),
                 json!({
@@ -72,7 +74,9 @@ impl Escrow {
                 }).to_string().as_bytes().to_vec(),
                 env::attached_deposit(),
                 env::prepaid_gas() / 2
-            )
+            );
+
+        p1.then(p2)
     }
 
     /// Allows an owner to cancel a deed, given appropriate parameters

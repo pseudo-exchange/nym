@@ -1,10 +1,14 @@
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::json_types::{ ValidAccountId };
 use near_sdk::{
-    env, Promise, near_bindgen, setup_alloc, PanicOnDefault, PublicKey
+    near_bindgen,
+    borsh::{self, BorshDeserialize, BorshSerialize},
+    json_types::{ ValidAccountId, Base58PublicKey },
+    env,
+    Promise,
+    PublicKey,
+    PanicOnDefault,
 };
 
-setup_alloc!();
+near_sdk::setup_alloc!();
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
@@ -20,21 +24,22 @@ impl Deed {
     /// Upon deploy, contract initializes with only escrow account owning this account
     /// All funds and previous ownership MUST be removed before escrow can validate
     /// the account is available for any other ownership transfers
-    #[init]
+    #[init(ignore_state)]
     pub fn new(
         escrow_account_id: ValidAccountId,
-        original_owner_pk: PublicKey
+        original_owner_pk: Base58PublicKey
     ) -> Self {
-        assert_ne!(env::signer_account_id(), env::current_account_id(), "Cannot sign against current account");
+        // assert_ne!(env::signer_account_id(), env::current_account_id(), "Cannot sign against current account");
 
-        // Transfer out remaining value?
-        let p1 = Promise::new(env::signer_account_id())
-            .transfer(env::account_balance());
+        // // Transfer out remaining value?
+        // let p1 = Promise::new(env::signer_account_id())
+        //     .transfer(env::account_balance());
 
-        let p2 = Promise::new(env::current_account_id())
+        // let p2 = 
+        Promise::new(env::current_account_id())
             .delete_key(original_owner_pk.clone().into());
 
-        p1.then(p2);
+        // p1.then(p2);
 
         Deed {
             escrow_account_id,
@@ -46,7 +51,7 @@ impl Deed {
     /// This function is only available to the original owner
     pub fn revert_ownership(&mut self) -> Promise {
         assert_eq!(env::predecessor_account_id(), self.escrow_account_id.to_string(), "Unauthorized access, escrow only");
-        assert_eq!(self.owner_pk, env::signer_account_pk(), "Invalid Owner");
+        // assert_eq!(self.owner_pk, env::signer_account_pk(), "Invalid Owner");
 
         Promise::new(env::current_account_id())
             .add_full_access_key(self.owner_pk.clone())
@@ -54,7 +59,7 @@ impl Deed {
 
     /// Called only by the escrow contract, this allows the escrow to fully capture
     /// the account, only having a single key for ownership
-    pub fn remove_key(&mut self, remove_key: PublicKey) -> Promise {
+    pub fn remove_key(&mut self, remove_key: Base58PublicKey) -> Promise {
         assert_eq!(env::predecessor_account_id(), self.escrow_account_id.to_string(), "Unauthorized access, escrow only");
         let rmky = remove_key.into();
 
@@ -63,7 +68,7 @@ impl Deed {
     }
 
     /// Completely changes the access keys of this account
-    pub fn transfer_ownership(&mut self, new_owner_pk: PublicKey) -> Promise {
+    pub fn transfer_ownership(&mut self, new_owner_pk: Base58PublicKey) -> Promise {
         assert_eq!(env::predecessor_account_id(), self.escrow_account_id.to_string(), "Unauthorized access, escrow only");
 
         self.owner_pk = new_owner_pk.clone().into();
