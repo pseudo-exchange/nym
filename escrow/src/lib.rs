@@ -70,7 +70,7 @@ impl Escrow {
                 b"new".to_vec(),
                 json!({
                     "escrow_account_id": env::current_account_id(),
-                    "original_owner_pk": env::signer_account_id()
+                    "original_owner_pk": env::signer_account_pk()
                 }).to_string().as_bytes().to_vec(),
                 env::attached_deposit(),
                 env::prepaid_gas() / 2
