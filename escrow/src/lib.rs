@@ -2,9 +2,9 @@ use near_sdk::{
     ext_contract,
     near_bindgen,
     borsh::{self, BorshDeserialize, BorshSerialize},
-    serde_json::{json},
-    collections::{ LookupSet },
-    json_types::{ ValidAccountId },
+    // serde_json::{json},
+    collections::{ LookupMap },
+    json_types::{ ValidAccountId, Base58PublicKey },
     AccountId,
     env,
     log,
@@ -19,7 +19,7 @@ const ESCROW_STORAGE_KEY: [u8; 1] = [0];
 
 #[ext_contract]
 pub trait ExtDeed {
-    fn new(&mut self, escrow_account_id: ValidAccountId, original_owner_pk: PublicKey);
+    fn new(&mut self, escrow_account_id: ValidAccountId);
     fn revert_ownership(&mut self) -> Promise;
     fn remove_key(&mut self, remove_key: PublicKey) -> Promise;
     fn transfer_ownership(&mut self, new_owner_pk: PublicKey) -> Promise;
@@ -28,11 +28,11 @@ pub trait ExtDeed {
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Escrow {
-    // THIS account id, most cases: escrow.nym.near
+    // THIS account id, most cases: escrow_nym.near
     id: AccountId,
 
     // keeps track of the escrowed accounts
-    accounts: LookupSet<AccountId>
+    accounts: LookupMap<AccountId, AccountId>
 }
 
 // Contract keeps track of accounts in escrow
@@ -44,44 +44,28 @@ impl Escrow {
     pub fn new() -> Self {
         Escrow {
             id: env::current_account_id(),
-            accounts: LookupSet::new(ESCROW_STORAGE_KEY.to_vec())
+            accounts: LookupMap::new(ESCROW_STORAGE_KEY.to_vec())
         }
     }
 
     /// Responsible for bonding an account to a deed contract, where
     /// escrow is the sole owner, and can only transfer ownership upon
     /// close of title
-    pub fn deed(&mut self, title: AccountId) -> Promise {
+    // NOTE: Currenly only possible if this escrow account has a public key with full access to account, otherwise deploy is not possible.
+    pub fn register(&mut self, underwriter: ValidAccountId) {
+        let title = env::signer_account_id();
         // Make sure this account isnt already in escrow
-        // assert_ne!(self.accounts.contains(&title.to_string()), true, "Account already in escrow");
+        assert_ne!(self.accounts.contains_key(&title.to_string()), true, "Account already in escrow");
 
         // add to registry
-        // self.accounts.insert(&title.to_string());
+        self.accounts.insert(&title.to_string(), &underwriter.to_string());
         log!("New deed: {}", &title);
-
-        // deploy deed
-        let p1 = Promise::new(title.clone())
-            .deploy_contract(
-                include_bytes!("../../res/deed.wasm").to_vec()
-            );
-
-        let p2 = Promise::new(title.to_string())
-            .function_call(
-                b"new".to_vec(),
-                json!({
-                    "escrow_account_id": env::current_account_id(),
-                    "original_owner_pk": env::signer_account_pk()
-                }).to_string().as_bytes().to_vec(),
-                env::attached_deposit(),
-                env::prepaid_gas() / 2
-            );
-
-        p1.then(p2)
     }
 
     /// Allows an owner to cancel a deed, given appropriate parameters
     pub fn revert_title(&mut self, title: ValidAccountId) -> Promise {
-        assert_eq!(self.accounts.contains(&title.to_string()), true, "Account not in escrow");
+        self.is_in_escrow(title.clone());
+        self.is_underwriter(title.clone());
 
         // Remove from registry
         self.accounts.remove(&title.to_string());
@@ -96,12 +80,13 @@ impl Escrow {
 
     /// Removes any excess public keys on an account, to ensure full
     /// Account transfer can happen trustlessly
-    pub fn encumbrance(&self, title: ValidAccountId, key: PublicKey) -> Promise {
-        assert_eq!(self.accounts.contains(&title.to_string()), true, "Account not in escrow");
+    pub fn encumbrance(&self, title: ValidAccountId, key: Base58PublicKey) -> Promise {
+        self.is_in_escrow(title.clone());
+        self.is_underwriter(title.clone());
 
         // Call the deed, to remove a key
         ext_deed::remove_key(
-            key,
+            key.into(),
             &title,
             0,
             env::prepaid_gas() / 3
@@ -110,8 +95,9 @@ impl Escrow {
 
     /// The full realization of an escrow deed, where the account is
     /// transferred to the new owner
-    pub fn close_escrow(&mut self, title: ValidAccountId, new_key: PublicKey) -> Promise {
-        assert_eq!(self.accounts.contains(&title.to_string()), true, "Account not in escrow");
+    pub fn close_escrow(&mut self, title: ValidAccountId, new_key: Base58PublicKey) -> Promise {
+        self.is_in_escrow(title.clone());
+        // TODO: Can only be called by auction house
 
         // Remove from registry
         self.accounts.remove(&title.to_string());
@@ -119,11 +105,19 @@ impl Escrow {
 
         // Call the deed, to transfer ownership to new public key
         ext_deed::transfer_ownership(
-            new_key,
+            new_key.into(),
             &title,
             0,
             env::prepaid_gas() / 3
         )
+    }
+
+    fn is_in_escrow(&self, title: ValidAccountId) {
+        assert_eq!(self.accounts.contains_key(&title.to_string()), true, "Account not in escrow");
+    }
+
+    fn is_underwriter(&self, title: ValidAccountId) {
+        assert_eq!(self.accounts.get(&title.to_string()).unwrap(), env::signer_account_id(), "Account cannot control escrow account");
     }
 }
 

@@ -22,10 +22,6 @@ This happens upon contract deploy of escrow contract. Main requirement is allowi
 1. Auction House deploys new escrow contract, without access keys
 2. Users verify no access keys via `near keys escrow.nym.near`
 
-#### Deploy Deed
-
-Deploys a contract to an account which should be transferred. Only allowed to be executed once, and is done only from account owner.
-
 #### Revert Title
 
 Proxy to deed revert_ownership function
@@ -45,9 +41,6 @@ Requires [near cli]()
 ```bash
 # Init
 near deploy --wasmFile res/escrow.wasm --initFunction new --initArgs '{}' --accountId escrow_account.testnet
-
-# deploy deed
-near call _escrow_account_ deed '{"title": "some_account.testnet"}' --accountId youraccount.testnet
 
 # Cancel deed
 near call _escrow_account_ revert_title '{"title": "some_account.testnet"}' --accountId youraccount.testnet

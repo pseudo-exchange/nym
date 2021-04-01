@@ -51,7 +51,7 @@ Requires [near cli]()
 
 ```bash
 # Init
-near deploy --wasmFile res/deed.wasm --initFunction new --initArgs '{"escrow_pk": "ed25591:PK_HERE", "escrow_account_id": "account_to_transfer.testnet", "original_owner_pk": "ed25591:PK_HERE"}' --accountId escrow_account.testnet
+near deploy --wasmFile res/deed.wasm --initFunction new --initArgs '{"underwriter": "account_in_control.testnet", "escrow_pk": "ed25591:PK_HERE", "escrow_account_id": "account_to_transfer.testnet"}' --accountId escrow_account.testnet
 
 # transfer ownership
 near call _account_here_ transfer_ownership '{"new_owner_pk": "ed25591:PK_HERE"}' --accountId youraccount.testnet
