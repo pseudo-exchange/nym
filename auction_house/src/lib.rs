@@ -221,7 +221,7 @@ impl AuctionHouse {
 
         // Loop to return losing funds, minus fees
         let bids = auction.bids.iter();
-        for (account_id, Bid { amount, pk, precommit }) in bids {
+        for (account_id, Bid { amount, pk: _, precommit: _ }) in bids {
             if amount > 0 {
                 Promise::new(account_id).transfer(amount);
             }
@@ -259,10 +259,10 @@ impl AuctionHouse {
         let mut winner_pk: PublicKey = vec![0];
         let mut highest_balance: Balance = 0;
 
-        let bids = auction.bids.iter();
+        let bids = auction.bids;
         
         // Loop to find winner
-        for (account_id, Bid { amount, pk, precommit}) in bids {
+        for (account_id, Bid { amount, pk, precommit: _}) in bids.iter() {
             if highest_balance < amount {
                 highest_balance = amount;
                 winner_id = account_id;
@@ -271,7 +271,7 @@ impl AuctionHouse {
         }
 
         // Loop to return losing funds, minus fees
-        for (account_id, Bid { amount, pk, precommit }) in bids {
+        for (account_id, Bid { amount, pk: _, precommit: _ }) in bids.iter() {
             if winner_id != account_id && amount > self.base_fee {
                 Promise::new(account_id).transfer(amount - self.base_fee);
             }
