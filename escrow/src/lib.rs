@@ -31,6 +31,9 @@ pub struct Escrow {
     // THIS account id, most cases: escrow_nym.near
     id: AccountId,
 
+    // TODO: Owner -- auction house?
+    owner_id: Option<AccountId>,
+
     // keeps track of the escrowed accounts
     accounts: LookupMap<AccountId, AccountId>
 }
@@ -44,7 +47,8 @@ impl Escrow {
     pub fn new() -> Self {
         Escrow {
             id: env::current_account_id(),
-            accounts: LookupMap::new(ESCROW_STORAGE_KEY.to_vec())
+            accounts: LookupMap::new(ESCROW_STORAGE_KEY.to_vec()),
+            owner_id: None,
         }
     }
 
@@ -63,7 +67,7 @@ impl Escrow {
     }
 
     /// Allows an owner to cancel a deed, given appropriate parameters
-    pub fn revert_title(&mut self, title: ValidAccountId) -> Promise {
+    pub fn revert_title(&mut self, title: AccountId) -> Promise {
         self.is_in_escrow(title.clone());
         self.is_underwriter(title.clone());
 
@@ -80,7 +84,7 @@ impl Escrow {
 
     /// Removes any excess public keys on an account, to ensure full
     /// Account transfer can happen trustlessly
-    pub fn encumbrance(&self, title: ValidAccountId, key: Base58PublicKey) -> Promise {
+    pub fn encumbrance(&self, title: AccountId, key: Base58PublicKey) -> Promise {
         self.is_in_escrow(title.clone());
         self.is_underwriter(title.clone());
 
@@ -95,7 +99,7 @@ impl Escrow {
 
     /// The full realization of an escrow deed, where the account is
     /// transferred to the new owner
-    pub fn close_escrow(&mut self, title: ValidAccountId, new_key: Base58PublicKey) -> Promise {
+    pub fn close_escrow(&mut self, title: AccountId, new_key: PublicKey) -> Promise {
         self.is_in_escrow(title.clone());
         // TODO: Can only be called by auction house
 
@@ -112,11 +116,11 @@ impl Escrow {
         )
     }
 
-    fn is_in_escrow(&self, title: ValidAccountId) {
+    fn is_in_escrow(&self, title: AccountId) {
         assert_eq!(self.accounts.contains_key(&title.to_string()), true, "Account not in escrow");
     }
 
-    fn is_underwriter(&self, title: ValidAccountId) {
+    fn is_underwriter(&self, title: AccountId) {
         assert_eq!(self.accounts.get(&title.to_string()).unwrap(), env::signer_account_id(), "Account cannot control escrow account");
     }
 }
