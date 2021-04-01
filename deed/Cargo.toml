@@ -1,6 +1,6 @@
 [package]
-name = "account_manager"
-version = "0.1.0"
+name = "deed"
+version = "0.1.3"
 authors = ["Trevor <hello.tjtc.near>"]
 edition = "2018"
 

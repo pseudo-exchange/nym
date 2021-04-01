@@ -1,11 +1,11 @@
-account_manager = { path = "./account_manager" }
+deed = { path = "./deed" }
 auction_house = { path = "./auction_house" }
 escrow = { path = "./escrow" }
 
 [workspace]
 # include a member for each contract
 members = [
-  "account_manager",
+  "deed",
   "auction_house",
   "escrow"
 ]

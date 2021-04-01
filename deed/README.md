@@ -1,4 +1,4 @@
-# Account Manager
+# Deed
 
 A tiny contract to manage account ownership and transfer functionality, by utilizing an escrow witness as the coordinator
 
@@ -16,12 +16,11 @@ A tiny contract to manage account ownership and transfer functionality, by utili
 This happens upon contract deploy from escrow contract. This requires the user to grant escrow public key access to their account. All precautions must be taken before initialization can proceed.
 
 1. User grants access to escrow, adding full access key to the account being transfered
-2. Escrow contract deploys an Account Manager (AM) contract, the code in this folder
-3. Escrow calls the function "new" on the newly deployed AM contract, which executes the following logic:
+2. Escrow contract deploys a Deed contract, the code in this folder
+3. Escrow calls the function "new" on the newly deployed Deed contract, which executes the following logic:
   3A. Make sure the initialization is valid
   3B. Transfer any/all balance on this account (No ability to know any sub account balances)
-  3C. Change access keys to hand over full ownership to escrow
-  3D. Finish by assigning state, for future contract calls
+  3C. Finish by assigning state, for future contract calls
 
 #### Removing Keys
 
@@ -52,7 +51,7 @@ Requires [near cli]()
 
 ```bash
 # Init
-near deploy --wasmFile res/account_manager.wasm --initFunction new --initArgs '{"escrow_pk": "ed25591:PK_HERE", "escrow_account_id": "account_to_transfer.testnet", "original_owner_pk": "ed25591:PK_HERE"}' --accountId escrow_account.testnet
+near deploy --wasmFile res/deed.wasm --initFunction new --initArgs '{"underwriter": "account_in_control.testnet", "escrow_pk": "ed25591:PK_HERE", "escrow_account_id": "account_to_transfer.testnet"}' --accountId escrow_account.testnet
 
 # transfer ownership
 near call _account_here_ transfer_ownership '{"new_owner_pk": "ed25591:PK_HERE"}' --accountId youraccount.testnet
