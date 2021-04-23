@@ -1,13 +1,15 @@
-deed = { path = "./deed" }
 auction_house = { path = "./auction_house" }
+deed = { path = "./deed" }
 escrow = { path = "./escrow" }
+transfer_owner = { path = "./transfer_owner" }
 
 [workspace]
 # include a member for each contract
 members = [
-  "deed",
   "auction_house",
-  "escrow"
+  "deed",
+  "escrow",
+  "transfer_owner"
 ]
 
 [profile.release]

@@ -18,7 +18,7 @@ use near_sdk::{
 near_sdk::setup_alloc!();
 
 pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
-const ACCESS_KEY_ALLOWANCE: u128 = 1_000_000_000_000_000_000_000;
+// const ACCESS_KEY_ALLOWANCE: u128 = 1_000_000_000_000_000_000_000;
 const CLOSE_BLOCK_OFFSET: u64 = 1_000_000;
 
 // fn only_admin() {
@@ -176,7 +176,11 @@ impl AuctionHouse {
     // Optional:
     // - user CAN update bid by calling this fn multiple times
     #[payable]
-    pub fn place_bid(&mut self, id: AccountId, pk: Base58PublicKey) -> Promise {
+    pub fn place_bid(
+        &mut self,
+        id: AccountId,
+        _pk: Base58PublicKey
+    ) -> Promise {
         match self.auctions.get(&id) {
             Some(auction) => {
                 assert_ne!(
