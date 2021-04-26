@@ -2,7 +2,7 @@ use near_sdk::{
     near_bindgen,
     ext_contract,
     borsh::{self, BorshDeserialize, BorshSerialize},
-    collections::{UnorderedMap},
+    collections::{ UnorderedMap, TreeMap},
     json_types::{ ValidAccountId, Base58PublicKey },
     serde_json::json,
     AccountId,
@@ -14,6 +14,7 @@ use near_sdk::{
     env,
     log
 };
+use bs58;
 
 near_sdk::setup_alloc!();
 
@@ -33,9 +34,10 @@ const CLOSE_BLOCK_OFFSET: u64 = 1_000_000;
 #[ext_contract]
 pub trait ExtEscrow {
     fn register(&mut self, underwriter: ValidAccountId);
+    fn in_escrow(&self, title: ValidAccountId) -> bool;
     fn revert_title(&mut self, title: AccountId) -> Promise;
-    fn encumbrance(&self, title: AccountId, key: Base58PublicKey) -> Promise;
     fn close_escrow(&mut self, title: AccountId, new_key: PublicKey) -> Promise;
+    fn update_escrow_settings(&mut self, auction_id: ValidAccountId);
 }
 
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
@@ -47,12 +49,13 @@ pub struct Bid {
 
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Auction {
-    pub underwriter: AccountId, // near account
-    pub winner_id: Option<AccountId>,
     pub title: AccountId,
-    pub close_block: Option<BlockHeight>, // Needs checking that theres no race case transactions
+    pub is_blind: bool,
+    pub underwriter: Option<AccountId>,
+    pub winner_id: Option<AccountId>,
+    pub close_block: Option<BlockHeight>,
     bids: UnorderedMap<AccountId, Bid>,
-    reveals: UnorderedMap<AccountId, Balance>,
+    reveals: TreeMap<Balance, AccountId>,
 }
 
 #[near_bindgen]
@@ -61,7 +64,7 @@ pub struct AuctionHouse {
     pub auctions: UnorderedMap<AccountId, Auction>,
     pub paused: bool,
     pub escrow_account_id: Option<AccountId>,
-    pub escrow_public_key: Option<PublicKey>,
+    pub escrow_pk: Option<PublicKey>,
     pub base_fee: Balance,
 }
 
@@ -70,7 +73,7 @@ impl Default for AuctionHouse {
         AuctionHouse {
             paused: false,
             escrow_account_id: None,
-            escrow_public_key: None,
+            escrow_pk: None,
             auctions: UnorderedMap::new(b"a".to_vec()),
             base_fee: ONE_NEAR / 100_000,
         }
@@ -83,8 +86,12 @@ impl AuctionHouse {
     /// Constructor:
     /// See notes regarding escrow contract, ownership & state  separation
     /// This method instantiates new auction house contract with baseline config
+    ///
+    /// ```bash
+    /// near call _auction_ new '{"escrow_account_id": "escrow_account.testnet", "escrow_pk": "ed25591:jfsdofa..."}' --accountId youraccount.testnet
+    /// ```
     #[init]
-    pub fn new(escrow_account_id: ValidAccountId, escrow_public_key: Base58PublicKey) -> Self {
+    pub fn new(escrow_account_id: ValidAccountId, escrow_pk: Base58PublicKey) -> Self {
         // Make absolutely sure this contract doesnt get state removed easily
         assert!(!env::state_exists(), "The contract is already initialized");
 
@@ -92,7 +99,7 @@ impl AuctionHouse {
             paused: false,
             auctions: UnorderedMap::new(b"a".to_vec()),
             escrow_account_id: Some(escrow_account_id.to_string()),
-            escrow_public_key: Some(escrow_public_key.into()),
+            escrow_pk: Some(escrow_pk.into()),
             base_fee: ONE_NEAR / 100_000,
         }
     }
@@ -106,9 +113,10 @@ impl AuctionHouse {
     pub fn create(
         &mut self,
         title: ValidAccountId,
-        owner_beneficiary: ValidAccountId,
+        underwriter: ValidAccountId,
         auction_start_bid_amount: Balance,
         auction_close_block: Option<BlockHeight>,
+        is_blind: Option<bool>
     ) {
         assert_eq!(
             &title.to_string(),
@@ -122,14 +130,14 @@ impl AuctionHouse {
         };
 
         let auction = Auction {
-            underwriter: env::signer_account_id(),
             title: title.to_string(),
+            is_blind: is_blind.unwrap_or(false),
+            underwriter: Some(underwriter.to_string()),
             winner_id: None,
             close_block: Some(close_block),
             bids: UnorderedMap::new(b"a".to_vec()),
-            reveals: UnorderedMap::new(b"b".to_vec()),
+            reveals: TreeMap::new(b"b")
         };
-        log!("auction string: {}", &title.to_string());
 
         // Check if there is already an auction with this same matching title
         // AND if that auction is ongoing (ongoing = current block < closing block)
@@ -176,7 +184,7 @@ impl AuctionHouse {
     // Optional:
     // - user CAN update bid by calling this fn multiple times
     #[payable]
-    pub fn place_bid(
+    pub fn bid(
         &mut self,
         id: AccountId,
         _pk: Base58PublicKey
@@ -198,7 +206,7 @@ impl AuctionHouse {
                 );
             }
             None => {
-                panic!("Shit got real");
+                panic!("Bid does not meet parameters");
             }
         }
 
@@ -207,6 +215,37 @@ impl AuctionHouse {
         // Keep track of how much balance user sent
         Promise::new(self.escrow_account_id.as_ref().unwrap().clone())
             .transfer(env::attached_deposit())
+    }
+
+    // NOTE: For TLAs, auctions can only be done against "registrar"
+    // Auctions for TLAs also must go through strict string schedules before starting bids.
+    // Restriction schedules consist of:
+    // 1. time lock
+    // 2. char length
+    // 3. char uniqueness
+    // 4. sha hash modulo 52 (debatable)
+    // 5. min bid size, based on char length
+
+    // NOTE: Registrar currently is public_key signed to create new accounts
+    // For auctions to work, either things should happen:
+    // 1. deploy a contract to registrar that accepts name creation, based on params
+    // 2. change the protocol to enable TLAs action for certain contracts (core contract)
+
+    // TODO:
+    /// Blind auctions require a commit/reveal setup. In this way, we can create a time boundary to give
+    /// auctions a more fair price outcome. Winner is still the highest bid, but with reveal phase outside
+    /// the normal bid phase, we can guarantee frontrunning doesnt skew price to some extent.
+    /// Commit in this context is just a number + salt string that is hashed.
+    pub fn bid_blind(&mut self, id: ValidAccountId, commit: Vec<u8>) {
+
+    }
+
+    /// Reveal allows the user to unmask their bid amount, and actually pay what they said that would.
+    /// Because the masked amount needs to actually be paid, we expect the sent deposit to match
+    #[payable]
+    pub fn reveal(&mut self, id: ValidAccountId, salt: String) {
+        let reveal_str: String = env::attached_deposit().to_string() + &salt;
+        let reveal_hash: Vec<u8> = bs58::encode(&reveal_str).into_string().as_bytes().to_vec();
     }
 
     // removes an auction if owner called it
@@ -351,7 +390,7 @@ mod tests {
 
         assert_eq!(
             Base58PublicKey { 0: vec![0, 1, 2] },
-            contract.escrow_public_key.unwrap(),
+            contract.escrow_pk.unwrap(),
             "Escrow account public key is set appropriately"
         );
 

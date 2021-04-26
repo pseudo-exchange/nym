@@ -22,13 +22,6 @@ This happens upon contract deploy from escrow contract. This requires the user t
   3B. Transfer any/all balance on this account (No ability to know any sub account balances)
   3C. Finish by assigning state, for future contract calls
 
-#### Removing Keys
-
-In the event that escrow system determines there are more access keys than are needed, escrow will use this function to fully clear any remaining keys. This function will be executed directly at the consent of the user, as they are in fact paying to have this done. It is necessary to maintain the risk by forcing the user to pay in this case.
-
-1. User gets a warning in a web UI showing there are more full access keys to remove
-2. User signs a transaction to remove access key, which isnt allowed to remove escrow, only all other access keys.
-
 #### Reverting Ownership
 
 At some point, an owner will decide they no longer want to leave an account in escrow. They can utilize this function to revert the ownership to the original access keys. This does not however, allow the user to revert to any new access keys, and if the originals are lost, a transfer via escrow MUST be made.

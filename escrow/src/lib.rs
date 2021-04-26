@@ -103,7 +103,9 @@ pub struct Escrow {
 /// should not be owned by anyone -- NO ACCESS KEYS!
 #[near_bindgen]
 impl Escrow {
+    /// ```bash
     /// near deploy --wasmFile res/escrow.wasm --initFunction new --initArgs '{"factory_id": "testnet", "auction_id": "auction.nym.testnet", "pk": "escrow_public_key"}' --accountId escrow_account.testnet
+    /// ```
     #[init(ignore_state)]
     pub fn new(
         factory_id: ValidAccountId,
@@ -184,7 +186,9 @@ impl Escrow {
     /// escrow is the sole owner, and can only transfer ownership upon
     /// close of title
     ///
+    /// ```bash
     /// near call _escrow_account_ register '{"underwriter": "some_other_account.testnet"}' --accountId youraccount_to_auction.testnet
+    /// ```
     ///
     // NOTE: Currenly only possible if this escrow account has a public key with full access to account, otherwise deploy is not possible.
     #[payable]
@@ -214,7 +218,9 @@ impl Escrow {
     // TODO: Finish gas needs
     /// Allows an owner to cancel a deed, given appropriate parameters
     ///
+    /// ```bash
     /// near call _escrow_account_ revert_title '{"title": "some_account.testnet"}' --accountId youraccount.testnet
+    /// ```
     pub fn revert_title(&mut self, title: ValidAccountId) -> Promise {
         self.is_in_escrow(title.clone());
         self.is_underwriter(title.clone());
@@ -235,6 +241,7 @@ impl Escrow {
     /// transferred to the new owner
     ///
     /// near call _escrow_account_ close_escrow '{"title": "some_account.testnet", "new_key": "ed25591:PK_HERE"}' --accountId youraccount.testnet
+    /// ```
     pub fn close_escrow(&mut self, title: ValidAccountId, new_key: PublicKey) -> Promise {
         self.is_in_escrow(title.clone());
 
@@ -254,11 +261,22 @@ impl Escrow {
         )
     }
 
+    /// Gets the data payload of a single task by hash
+    ///
+    /// ```bash
+    /// near view _escrow_account_ in_escrow '{"title": "some_account.testnet"}'
+    /// ```
+    pub fn in_escrow(&self, title: ValidAccountId) -> bool {
+        self.accounts.get(&title.to_string()) != None
+    }
+
     /// change the contract basic parameters, in case of needing to upgrade
     /// or change to different account IDs later.
     /// Can only be called by the auction contract
     ///
+    /// ```bash
     /// near call _escrow_account_ update_escrow_settings '{"auction_id": "auction2.testnet"}' --accountId auction1.testnet
+    /// ```
     pub fn update_escrow_settings(&mut self, auction_id: ValidAccountId) {
         assert_eq!(self.auction_id, env::predecessor_account_id(), "Callee must be auction contract");
         self.auction_id = auction_id.to_string();
