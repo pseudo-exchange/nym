@@ -2,67 +2,219 @@ use near_sdk::{
     ext_contract,
     near_bindgen,
     borsh::{self, BorshDeserialize, BorshSerialize},
-    // serde_json::{json},
+    serde_json::{json},
     collections::{ LookupMap },
     json_types::{ ValidAccountId, Base58PublicKey },
     AccountId,
     env,
     log,
     Promise,
+    PromiseResult,
+    PromiseOrValue,
     PublicKey,
     PanicOnDefault,
 };
+use std::convert::TryFrom;
 
 near_sdk::setup_alloc!();
 
-const ESCROW_STORAGE_KEY: [u8; 1] = [0];
+const ESCROW_STORAGE_TLA_KEY: [u8; 1] = [0];
+const ESCROW_STORAGE_ACCOUNT_KEY: [u8; 1] = [1];
+
+// TODO: Finalize amounts needed!
+// Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa - Batmannnnnnnn
+pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
+const NEW_ACCOUNT_STORAGE_AMOUNT: u128 = ONE_NEAR * 3;
+const MAX_GAS_FEE: u64 = 300_000_000_000_000;
+const NEW_ACCOUNT_GAS_FEE: u64 = MAX_GAS_FEE / 3;
+const DELETE_ACCOUNT_GAS_FEE: u64 = MAX_GAS_FEE / 3;
+const REGISTER_CALLBACK_GAS_FEE: u64 = MAX_GAS_FEE / 2;
+const DEED_NEW_GAS_FEE: u64 = MAX_GAS_FEE / 3;
+// const REGISTRAR: &str = "registrar";
+
+#[ext_contract(ext_self)]
+trait ExtSelf {
+    fn on_register(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
+    fn finalize_register(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
+}
+
+#[ext_contract]
+trait ExtAccountFactory {
+    fn create_account(
+        &mut self,
+        new_account_id: AccountId,
+        new_public_key: Base58PublicKey,
+    ) -> Promise;
+}
 
 #[ext_contract]
 pub trait ExtDeed {
-    fn new(&mut self, escrow_account_id: ValidAccountId);
+    fn new(underwriter_id: ValidAccountId, underwriter_pk: Base58PublicKey, escrow_account_id: ValidAccountId, escrow_pk: Base58PublicKey) -> Self;
     fn revert_ownership(&mut self) -> Promise;
-    fn remove_key(&mut self, remove_key: PublicKey) -> Promise;
-    fn transfer_ownership(&mut self, new_owner_pk: PublicKey) -> Promise;
+    fn transfer_ownership(&mut self, new_underwriter_pk: PublicKey) -> Promise;
+}
+
+#[ext_contract]
+pub trait ExtTransferOwner {
+    fn delete_self(&self) -> Promise;
+}
+
+fn is_promise_success() -> bool {
+    assert_eq!(
+        env::promise_results_count(),
+        1,
+        "Contract expected a result on the callback"
+    );
+    match env::promise_result(0) {
+        PromiseResult::Successful(_) => true,
+        _ => false,
+    }
+}
+
+fn only_self() {
+    assert_eq!(
+        env::predecessor_account_id(),
+        env::current_account_id(),
+        "Callback can only be called from the contract"
+    );
 }
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Escrow {
-    // THIS account id, most cases: escrow_nym.near
+    /// THIS account id, most cases: escrow_nym.near
     id: AccountId,
+    pk: PublicKey,
+
+    /// The account that can create base accounts (in testnet, factory_id: "testnet", mainnet factory_id: "near")
+    factory_id: AccountId,
+
+    /// The account that handles all logic for auctions, bids & other actions
+    auction_id: AccountId,
 
     // keeps track of the escrowed accounts
+    tlas: LookupMap<AccountId, AccountId>,
     accounts: LookupMap<AccountId, AccountId>
 }
 
-// Contract keeps track of accounts in escrow
-// is the only account that can execute functions on escrowed account
-// should not be owned by anyone -- NO ACCESS KEYS!
+/// Escrow
+/// Contract keeps track of accounts in escrow
+/// is the only account that can execute functions on escrowed account
+/// should not be owned by anyone -- NO ACCESS KEYS!
 #[near_bindgen]
 impl Escrow {
+    /// near deploy --wasmFile res/escrow.wasm --initFunction new --initArgs '{"factory_id": "testnet", "auction_id": "auction.nym.testnet", "pk": "escrow_public_key"}' --accountId escrow_account.testnet
     #[init(ignore_state)]
-    pub fn new() -> Self {
+    pub fn new(
+        factory_id: ValidAccountId,
+        auction_id: ValidAccountId,
+        pk: Base58PublicKey
+    ) -> Self {
         Escrow {
             id: env::current_account_id(),
-            accounts: LookupMap::new(ESCROW_STORAGE_KEY.to_vec())
+            pk: pk.into(),
+            factory_id: factory_id.to_string(),
+            auction_id: auction_id.to_string(),
+            tlas: LookupMap::new(ESCROW_STORAGE_TLA_KEY.to_vec()),
+            accounts: LookupMap::new(ESCROW_STORAGE_ACCOUNT_KEY.to_vec()),
         }
     }
 
+    // TODO: Finish gas needs
+    /// Callback of the on_register function
+    /// Responsible for initializing the deed contract with ownership params
+    pub fn finalize_register(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise {
+        only_self();
+        ext_deed::new(
+            underwriter.clone(),
+            Base58PublicKey::try_from(env::signer_account_pk()).unwrap(),
+            ValidAccountId::try_from(self.id.clone()).unwrap(),
+            Base58PublicKey::try_from(self.pk.clone()).unwrap(),
+            &title.clone().to_string(),
+            0,
+            DEED_NEW_GAS_FEE
+        )
+    }
+
+    // TODO: Finish gas needs
+    /// Callback of the register function
+    /// Responsible for creating the account again, bonding to escrow holdings
+    /// Deploys a contract to the new account, must be initialed!
+    pub fn on_register(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> PromiseOrValue<bool> {
+        only_self();
+        if is_promise_success() {
+            // add to registry
+            self.accounts.insert(&title.to_string(), &underwriter.to_string());
+            log!("New deed: {}", &title);
+
+            // now that account has been deleted, create again!
+            PromiseOrValue::Promise(
+                ext_account_factory::create_account(
+                    title.clone().to_string(),
+                    Base58PublicKey::try_from(env::signer_account_pk()).unwrap(),
+                    &self.factory_id,
+                    NEW_ACCOUNT_STORAGE_AMOUNT,
+                    NEW_ACCOUNT_GAS_FEE
+                )
+                .then(
+                    // deploy deed contract, to allow final management
+                    Promise::new(underwriter.clone().to_string())
+                        .deploy_contract(
+                            include_bytes!("../../res/deed.wasm").to_vec(),
+                        )
+                        .then(
+                            ext_self::finalize_register(
+                                title,
+                                underwriter,
+                                &env::current_account_id(),
+                                0,
+                                REGISTER_CALLBACK_GAS_FEE 
+                            )
+                        )
+                )
+            )
+        } else {
+            // If register failed, dont do anything we have to revert
+            PromiseOrValue::Value(false)
+        }
+    }
+
+    // TODO: Finish gas needs
     /// Responsible for bonding an account to a deed contract, where
     /// escrow is the sole owner, and can only transfer ownership upon
     /// close of title
+    ///
+    /// near call _escrow_account_ register '{"underwriter": "some_other_account.testnet"}' --accountId youraccount_to_auction.testnet
+    ///
     // NOTE: Currenly only possible if this escrow account has a public key with full access to account, otherwise deploy is not possible.
-    pub fn register(&mut self, underwriter: ValidAccountId) {
-        let title = env::signer_account_id();
+    #[payable]
+    pub fn register(&mut self, underwriter: ValidAccountId) -> Promise {
+        let title = ValidAccountId::try_from(env::signer_account_id()).unwrap();
         // Make sure this account isnt already in escrow
         assert_ne!(self.accounts.contains_key(&title.to_string()), true, "Account already in escrow");
 
-        // add to registry
-        self.accounts.insert(&title.to_string(), &underwriter.to_string());
-        log!("New deed: {}", &title);
+        Promise::new(title.clone().to_string())
+            .function_call(
+                b"delete_self".to_vec(),
+                json!({}).to_string().as_bytes().to_vec(),
+                0,
+                DELETE_ACCOUNT_GAS_FEE
+            )
+            .then(
+                ext_self::on_register(
+                    title,
+                    underwriter,
+                    &env::current_account_id(),
+                    0,
+                    REGISTER_CALLBACK_GAS_FEE
+                )
+            )
     }
 
+    // TODO: Finish gas needs
     /// Allows an owner to cancel a deed, given appropriate parameters
+    ///
+    /// near call _escrow_account_ revert_title '{"title": "some_account.testnet"}' --accountId youraccount.testnet
     pub fn revert_title(&mut self, title: ValidAccountId) -> Promise {
         self.is_in_escrow(title.clone());
         self.is_underwriter(title.clone());
@@ -78,26 +230,16 @@ impl Escrow {
         )
     }
 
-    /// Removes any excess public keys on an account, to ensure full
-    /// Account transfer can happen trustlessly
-    pub fn encumbrance(&self, title: ValidAccountId, key: Base58PublicKey) -> Promise {
-        self.is_in_escrow(title.clone());
-        self.is_underwriter(title.clone());
-
-        // Call the deed, to remove a key
-        ext_deed::remove_key(
-            key.into(),
-            &title,
-            0,
-            env::prepaid_gas() / 3
-        )
-    }
-
+    // TODO: Finish gas needs
     /// The full realization of an escrow deed, where the account is
     /// transferred to the new owner
-    pub fn close_escrow(&mut self, title: ValidAccountId, new_key: Base58PublicKey) -> Promise {
+    ///
+    /// near call _escrow_account_ close_escrow '{"title": "some_account.testnet", "new_key": "ed25591:PK_HERE"}' --accountId youraccount.testnet
+    pub fn close_escrow(&mut self, title: ValidAccountId, new_key: PublicKey) -> Promise {
         self.is_in_escrow(title.clone());
-        // TODO: Can only be called by auction house
+
+        // Can only be called by auction house
+        assert_eq!(self.auction_id, env::predecessor_account_id(), "Must be called only by auction");
 
         // Remove from registry
         self.accounts.remove(&title.to_string());
@@ -112,6 +254,16 @@ impl Escrow {
         )
     }
 
+    /// change the contract basic parameters, in case of needing to upgrade
+    /// or change to different account IDs later.
+    /// Can only be called by the auction contract
+    ///
+    /// near call _escrow_account_ update_escrow_settings '{"auction_id": "auction2.testnet"}' --accountId auction1.testnet
+    pub fn update_escrow_settings(&mut self, auction_id: ValidAccountId) {
+        assert_eq!(self.auction_id, env::predecessor_account_id(), "Callee must be auction contract");
+        self.auction_id = auction_id.to_string();
+    }
+
     fn is_in_escrow(&self, title: ValidAccountId) {
         assert_eq!(self.accounts.contains_key(&title.to_string()), true, "Account not in escrow");
     }
@@ -121,6 +273,7 @@ impl Escrow {
     }
 }
 
+// TODO: Finish tests!
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use near_sdk::test_utils::{accounts, VMContextBuilder};

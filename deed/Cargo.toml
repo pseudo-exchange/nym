@@ -1,6 +1,6 @@
 [package]
 name = "deed"
-version = "0.1.3"
+version = "0.2.0"
 authors = ["Trevor <hello.tjtc.near>"]
 edition = "2018"
 
@@ -8,4 +8,4 @@ edition = "2018"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-near-sdk = { git = "https://github.com/near/near-sdk-rs.git", rev="249dacdcd3fd34bc00f0895a275f33f05cd910c1" }
+near-sdk = "3.1.0"

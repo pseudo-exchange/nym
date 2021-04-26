@@ -1,6 +1,6 @@
 [package]
-name = "auction_house"
-version = "0.2.0"
+name = "transfer-owner"
+version = "0.1.0"
 authors = ["Trevor <hello.tjtc.near>"]
 edition = "2018"
 
