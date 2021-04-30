@@ -16,7 +16,7 @@ Run:
 ## Testing
 To test run:
 ```bash
-cargo test --package auction_house -- --nocapture
+cargo test --package registrar -- --nocapture
 ```
 
 ## Changelog

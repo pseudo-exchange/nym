@@ -112,6 +112,8 @@ impl Escrow {
         auction_id: ValidAccountId,
         pk: Base58PublicKey
     ) -> Self {
+        assert_eq!(env::current_account_id(), env::signer_account_id(), "Must be called by owner");
+
         Escrow {
             id: env::current_account_id(),
             pk: pk.into(),
@@ -267,7 +269,7 @@ impl Escrow {
     /// near view _escrow_account_ in_escrow '{"title": "some_account.testnet"}'
     /// ```
     pub fn in_escrow(&self, title: ValidAccountId) -> bool {
-        self.accounts.get(&title.to_string()) != None
+        self.accounts.get(&title.to_string()).is_some()
     }
 
     /// change the contract basic parameters, in case of needing to upgrade
@@ -291,7 +293,6 @@ impl Escrow {
     }
 }
 
-// TODO: Finish tests!
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use near_sdk::test_utils::{accounts, VMContextBuilder};
@@ -301,21 +302,102 @@ mod tests {
 
     use super::*;
 
-    fn get_context(predecessor_account_id: ValidAccountId) -> VMContextBuilder {
+    // factory: Acct 0
+    // auction: Acct 1
+    // escrow (me): Acct 2
+    fn create_blank_escrow() -> Escrow {
+        Escrow::new(
+            accounts(0),
+            accounts(1),
+            Base58PublicKey::try_from("ed25519:4ZhGmuKTfQn9ZpHCQVRwEr4JnutL8Uu3kArfxEqksfVM".to_string()).unwrap()
+        )
+    }
+
+    fn get_context(c: ValidAccountId, s: ValidAccountId, p: ValidAccountId) -> VMContextBuilder {
         let mut builder = VMContextBuilder::new();
         builder
-            .current_account_id(accounts(0))
-            .signer_account_id(predecessor_account_id.clone())
-            .predecessor_account_id(predecessor_account_id);
+            .current_account_id(c)
+            .signer_account_id(s)
+            .predecessor_account_id(p);
         builder
     }
 
     #[test]
-    fn test_thang() {
-        let mut context = get_context(accounts(1));
+    fn test_init() {
+        let context = get_context(accounts(3), accounts(3), accounts(3));
         testing_env!(context.build());
-        let contract = Escrow::new();
-        testing_env!(context.is_view(true).build());
-        assert_eq!(contract.thang(), "hiii");
+        let contract = create_blank_escrow();
+        assert_eq!(contract.factory_id, accounts(0).to_string());
+        assert_eq!(contract.auction_id, accounts(1).to_string());
     }
+
+    #[test]
+    #[should_panic(expected = "Must be called by owner")]
+    fn test_init_fail() {
+        let context = get_context(accounts(3), accounts(2), accounts(2));
+        testing_env!(context.build());
+        create_blank_escrow();
+    }
+
+    #[test]
+    fn test_register() {
+        let mut context = get_context(accounts(3), accounts(3), accounts(3));
+        testing_env!(context.build());
+        let mut contract = create_blank_escrow();
+
+        context = get_context(accounts(3), accounts(2), accounts(2));
+        testing_env!(context.build());
+
+        contract.register(accounts(2));
+    }
+
+    // #[test]
+    // #[should_panic(expected = "Account already in escrow")]
+    // fn test_register_error() {
+    //     let context = get_context(accounts(3), accounts(3), accounts(3));
+    //     testing_env!(context.build());
+    //     let mut contract = create_blank_escrow();
+
+    //     let context2 = get_context(accounts(3), accounts(2), accounts(2));
+    //     testing_env!(context2.build());
+
+    //     contract.register(accounts(2));
+    //     testing_env!(context2.build());
+    //     contract.register(accounts(2));
+    // }
+
+    // #[test]
+    // fn test_in_escrow() {
+    //     let context = get_context(accounts(3), accounts(3), accounts(3));
+    //     testing_env!(context.build());
+    //     let mut contract = create_blank_escrow();
+
+    //     let context2 = get_context(accounts(3), accounts(2), accounts(2));
+    //     testing_env!(context2.build());
+
+    //     contract.register(accounts(2));
+    //     testing_env!(context2.build());
+    //     let is_registered: bool = contract.in_escrow(accounts(2));
+    //     assert!(is_registered, "Needs to be registered");
+    // }
+
+    // #[test]
+    // fn test_register() {
+    //     let context = get_context(accounts(0), Some(usize::from(u8::from(0))));
+    //     testing_env!(context.build());
+    //     let contract = TransferOwner::new(
+    //         accounts(1),
+    //         accounts(3)
+    //     );
+
+    //     let mut builder = VMContextBuilder::new();
+    //     builder
+    //         .current_account_id(accounts(1))
+    //         .signer_account_id(accounts(1).clone())
+    //         .signer_account_pk(b"ed25519:AtysLvy7KGoE8pznUgXvSHa4vYyGvrDZFcT8jgb8PEQ6".to_vec())
+    //         .predecessor_account_id(accounts(1));
+    //     testing_env!(builder.build());
+
+    //     contract.register();
+    // }
 }

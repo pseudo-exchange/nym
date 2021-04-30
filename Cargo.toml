@@ -1,4 +1,4 @@
-auction_house = { path = "./auction_house" }
+registrar = { path = "./registrar" }
 deed = { path = "./deed" }
 escrow = { path = "./escrow" }
 transfer_owner = { path = "./transfer_owner" }
@@ -6,11 +6,15 @@ transfer_owner = { path = "./transfer_owner" }
 [workspace]
 # include a member for each contract
 members = [
-  "auction_house",
+  "registrar",
   "deed",
   "escrow",
   "transfer_owner"
 ]
+
+#[dev-dependencies]
+#near-sdk = "3.1.0"
+#near-sdk-sim = "3.1.0"
 
 [profile.release]
 codegen-units = 1

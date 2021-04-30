@@ -6,6 +6,7 @@
     "build:contracts": "./build.sh",
     "test": "npm run test:to",
     "test:deed": "cd deed && cargo test --package deed -- --nocapture",
+    "test:escrow": "cd escrow && cargo test --package escrow",
     "test:to": "cd transfer_owner && cargo test --package transfer-owner"
   },
   "authors": ["@TrevorJTClarke", "@seedyrom"],
