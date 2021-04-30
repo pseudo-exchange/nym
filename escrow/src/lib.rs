@@ -313,18 +313,19 @@ mod tests {
         )
     }
 
-    fn get_context(c: ValidAccountId, s: ValidAccountId, p: ValidAccountId) -> VMContextBuilder {
+    fn get_context(c: ValidAccountId, s: ValidAccountId, p: ValidAccountId, is_view: Option<bool>) -> VMContextBuilder {
         let mut builder = VMContextBuilder::new();
         builder
             .current_account_id(c)
             .signer_account_id(s)
-            .predecessor_account_id(p);
+            .predecessor_account_id(p)
+            .is_view(is_view.unwrap_or(false));
         builder
     }
 
     #[test]
     fn test_init() {
-        let context = get_context(accounts(3), accounts(3), accounts(3));
+        let context = get_context(accounts(3), accounts(3), accounts(3), Some(false));
         testing_env!(context.build());
         let contract = create_blank_escrow();
         assert_eq!(contract.factory_id, accounts(0).to_string());
@@ -334,18 +335,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "Must be called by owner")]
     fn test_init_fail() {
-        let context = get_context(accounts(3), accounts(2), accounts(2));
+        let context = get_context(accounts(3), accounts(2), accounts(2), Some(false));
         testing_env!(context.build());
         create_blank_escrow();
     }
 
     #[test]
     fn test_register() {
-        let mut context = get_context(accounts(3), accounts(3), accounts(3));
+        let mut context = get_context(accounts(3), accounts(3), accounts(3), Some(false));
         testing_env!(context.build());
         let mut contract = create_blank_escrow();
 
-        context = get_context(accounts(3), accounts(2), accounts(2));
+        context = get_context(accounts(3), accounts(2), accounts(2), Some(false));
         testing_env!(context.build());
 
         contract.register(accounts(2));
@@ -366,20 +367,22 @@ mod tests {
     //     contract.register(accounts(2));
     // }
 
-    // #[test]
-    // fn test_in_escrow() {
-    //     let context = get_context(accounts(3), accounts(3), accounts(3));
-    //     testing_env!(context.build());
-    //     let mut contract = create_blank_escrow();
+    #[test]
+    fn test_in_escrow() {
+        let context = get_context(accounts(3), accounts(3), accounts(3), Some(false));
+        testing_env!(context.build());
+        let mut contract = create_blank_escrow();
 
-    //     let context2 = get_context(accounts(3), accounts(2), accounts(2));
-    //     testing_env!(context2.build());
+        let context2 = get_context(accounts(3), accounts(2), accounts(2), Some(false));
+        testing_env!(context2.build());
 
-    //     contract.register(accounts(2));
-    //     testing_env!(context2.build());
-    //     let is_registered: bool = contract.in_escrow(accounts(2));
-    //     assert!(is_registered, "Needs to be registered");
-    // }
+        contract.register(accounts(2));
+
+        let context3 = get_context(accounts(3), accounts(2), accounts(2), Some(true));
+        testing_env!(context3.build());
+        let is_registered: bool = contract.in_escrow(accounts(2));
+        assert!(is_registered, "Needs to be registered");
+    }
 
     // #[test]
     // fn test_register() {
