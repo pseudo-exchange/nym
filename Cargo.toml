@@ -3,8 +3,7 @@
 members = [
   "registrar",
   "deed",
-  "escrow",
-  "transfer_owner"
+  "escrow"
 ]
 
 #[dev-dependencies]

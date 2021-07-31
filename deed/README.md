@@ -8,8 +8,8 @@ A tiny contract to manage account ownership and transfer functionality, by utili
 
 1. Initialization
 2. IF too many keys -- Remove Keys until only escrow
-3. IF owner changes mind -- Revert Ownership
-4. Transfer ownership
+3. IF owner changes mind -- change ownership via escrow
+4. change ownership only possible upon auction finalized by new owner
 
 #### Initialization
 

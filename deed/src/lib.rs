@@ -1,28 +1,36 @@
 use near_sdk::{
+    AccountId,
     near_bindgen,
     ext_contract,
     borsh::{self, BorshDeserialize, BorshSerialize},
     json_types::{ ValidAccountId, Base58PublicKey },
     env,
     Promise,
-    PublicKey,
+    PromiseResult,
     PanicOnDefault,
+    log,
 };
 
 near_sdk::setup_alloc!();
 
-#[ext_contract]
+const REGISTER_GAS_FEE: u64 = 20_000_000_000_000; // 20 Tgas
+const CALLBACK_GAS_FEE: u64 = 20_000_000_000_000; // 20 Tgas
+
+#[ext_contract(ext_escrow)]
 pub trait ExtEscrow {
     fn register(&mut self);
+}
+
+#[ext_contract(ext_self)]
+pub trait ExtSelf {
+    fn ownership_callback(&mut self, original_owner: AccountId);
 }
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Deed {
-    escrow_account_id: ValidAccountId,
-    escrow_pk: PublicKey,
-    underwriter_id: ValidAccountId,
-    underwriter_pk: PublicKey,
+    escrow: AccountId,
+    underwriter: AccountId,
 }
 
 /// Deed
@@ -31,43 +39,71 @@ pub struct Deed {
 impl Deed {
     /// Upon deploy, contract initializes with only escrow account owning this account
     /// the account is available for any other ownership transfers
+    ///
+    /// ```bash
+    /// near deploy --wasmFile res/transfer_owner.wasm --initFunction new --initArgs '{"escrow": "escrow.testnet", "underwriter": "ACCOUNT_THAT_WILL_OWN.testnet"}' --accountId ACCOUNT_THAT_WILL_OWN.testnet --gas 300000000000000
+    /// ```
     #[init(ignore_state)]
     pub fn new(
-        underwriter_id: ValidAccountId,
-        underwriter_pk: Base58PublicKey,
-        escrow_account_id: ValidAccountId,
-        escrow_pk: Base58PublicKey
+        underwriter: ValidAccountId,
+        escrow: ValidAccountId
     ) -> Self {
-        assert_eq!(env::signer_account_id(), env::current_account_id(), "Signer must be able to relinquish ownership");
+        assert_eq!(env::signer_account_id(), env::current_account_id(), "Signer must have original ownership");
+        assert_eq!(env::predecessor_account_id(), env::current_account_id(), "Signer must have original ownership");
+
+        // register with escrow contract
+        ext_escrow::register(
+            &escrow.to_string(),
+            0,
+            REGISTER_GAS_FEE,
+        );
 
         Deed {
-            escrow_account_id,
-            escrow_pk: escrow_pk.into(),
-            underwriter_id,
-            underwriter_pk: underwriter_pk.into()
+            escrow: escrow.to_string(),
+            underwriter: underwriter.to_string(),
         }
     }
 
-    /// Allows original owner to get access back to this account
-    /// This function is only accessible via escrow, but can be called by anyone
-    pub fn revert_ownership(&mut self) -> Promise {
-        self.change_ownership(self.underwriter_pk.clone())
-    }
+    /// Adding access keys for escrow mediated keys
+    /// IMPORTANT: pk MUST be the pk of the claimer's signing keys, otherwise they wont be able to own it!
+    ///
+    /// ```bash
+    /// near call escrow.testnet claim '{"pk": "ed25519:..."}' --accountId ACCOUNT_THAT_OWNS.testnet --gas 300000000000000
+    /// ```
+    pub fn change_ownership(&mut self, pk: Base58PublicKey) -> Promise {
+        assert_eq!(env::predecessor_account_id(), self.escrow.to_string(), "Unauthorized access, escrow only");
 
-    /// Completely changes the access keys of this account
-    pub fn transfer_ownership(&mut self, new_underwriter_pk: Base58PublicKey) -> Promise {
-        self.change_ownership(new_underwriter_pk.into())
-    }
-
-    /// Internal function for adding/removing access keys
-    fn change_ownership(&mut self, pk: PublicKey) -> Promise {
-        assert_eq!(env::predecessor_account_id(), self.escrow_account_id.to_string(), "Unauthorized access, escrow only");
+        // Remove underwriter so escrow is the sole executor of the account temporarily
+        self.underwriter = AccountId::default();
 
         // Add new access key
-        // Remove escrow key
         Promise::new(env::current_account_id())
-            .add_full_access_key(pk)
-            .delete_key(self.escrow_pk.clone().into())
+            .add_full_access_key(pk.into())
+            .then(
+                ext_self::ownership_callback(
+                    self.underwriter.clone(),
+                    &env::current_account_id(),
+                    0,
+                    CALLBACK_GAS_FEE,
+                )
+            )
+    }
+
+    /// Internal function to check that the key change was successful
+    #[private]
+    pub fn ownership_callback(&mut self, original_owner: AccountId) {
+        match env::promise_result(0) {
+            PromiseResult::Successful(_) => {
+                // NOTE: this contract could be removed now.
+                log!("Owner transfer success");
+            }
+            PromiseResult::Failed => {
+                // reset owner if unsuccessful
+                self.underwriter = original_owner;
+                log!("Owner transfer failure");
+            }
+            PromiseResult::NotReady => unreachable!(),
+        };
     }
 }
 
