@@ -24,18 +24,26 @@ const ESCROW_STORAGE_ACCOUNT_KEY: [u8; 1] = [1];
 // TODO: Finalize amounts needed!
 // Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa - Batmannnnnnnn
 pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
-const NEW_ACCOUNT_STORAGE_AMOUNT: u128 = ONE_NEAR * 3;
-const MAX_GAS_FEE: u64 = 300_000_000_000_000;
-const NEW_ACCOUNT_GAS_FEE: u64 = MAX_GAS_FEE / 3;
-const DELETE_ACCOUNT_GAS_FEE: u64 = MAX_GAS_FEE / 3;
-const REGISTER_CALLBACK_GAS_FEE: u64 = MAX_GAS_FEE / 2;
-const DEED_NEW_GAS_FEE: u64 = MAX_GAS_FEE / 3;
+// const NEW_ACCOUNT_STORAGE_AMOUNT: u128 = ONE_NEAR * 6;
+const T_GAS: u64 = 1_000_000_000_000;
+// const MAX_GAS_FEE: u64 = 300 * T_GAS;
+// const NEW_ACCOUNT_GAS_FEE: u64 = 25 * T_GAS;
+// const DELETE_ACCOUNT_GAS_FEE: u64 = 25 * T_GAS;
+// const REGISTER_CALLBACK_GAS_FEE: u64 = 50 * T_GAS;
+// const DEED_NEW_GAS_FEE: u64 = 25 * T_GAS;
+const DELETE_ACCOUNT_GAS_FEE: u64 = 5_000_000_000_000; // 5 Tgas
+const REGISTER_CALLBACK_GAS_FEE: u64 = 20_000_000_000_000; // 20 Tgas
+const NEW_ACCOUNT_GAS_FEE: u64 = 100_000_000_000_000;
+const DEED_NEW_GAS_FEE: u64 = 100_000_000_000_000;
 // const REGISTRAR: &str = "registrar";
 
 #[ext_contract(ext_self)]
 trait ExtSelf {
-    fn on_register(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
-    fn finalize_register(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
+    fn on_register_p1(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
+    fn on_register_p2(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
+    fn p2(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
+    fn p2a(&mut self, title: ValidAccountId) -> Promise;
+    fn on_register_p3(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
 }
 
 #[ext_contract]
@@ -59,26 +67,6 @@ pub trait ExtTransferOwner {
     fn delete_self(&self) -> Promise;
 }
 
-fn is_promise_success() -> bool {
-    assert_eq!(
-        env::promise_results_count(),
-        1,
-        "Contract expected a result on the callback"
-    );
-    match env::promise_result(0) {
-        PromiseResult::Successful(_) => true,
-        _ => false,
-    }
-}
-
-fn only_self() {
-    assert_eq!(
-        env::predecessor_account_id(),
-        env::current_account_id(),
-        "Callback can only be called from the contract"
-    );
-}
-
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Escrow {
@@ -95,6 +83,8 @@ pub struct Escrow {
     // keeps track of the escrowed accounts
     tlas: LookupMap<AccountId, AccountId>,
     accounts: LookupMap<AccountId, AccountId>
+
+    // TODO: setup DAO whitelists and params for TLAs
 }
 
 /// Escrow
@@ -127,8 +117,13 @@ impl Escrow {
     // TODO: Finish gas needs
     /// Callback of the on_register function
     /// Responsible for initializing the deed contract with ownership params
-    pub fn finalize_register(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise {
-        only_self();
+    #[private]
+    pub fn on_register_p3(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise {
+        // add to registry
+        self.accounts.insert(&title.to_string(), &underwriter.to_string());
+        log!("New deed: {}", &title);
+        log!("Now im trying to init deed");
+
         ext_deed::new(
             underwriter.clone(),
             Base58PublicKey::try_from(env::signer_account_pk()).unwrap(),
@@ -140,47 +135,68 @@ impl Escrow {
         )
     }
 
+    // TODO: Change to more callbacks, Finish gas needs
+    /// Callback of the register function
+    /// Deploys a contract to the new account, must be initialed!
+    #[private]
+    pub fn on_register_p2(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise { //OrValue<bool>
+        // if is_promise_success() {
+            log!("Now im trying to deploy deed");
+            // now that account has been deleted, create again!
+            // PromiseOrValue::Promise(
+                // deploy deed contract, to allow final management
+                Promise::new(title.clone().to_string())
+                    .deploy_contract(
+                        include_bytes!("../../res/deed.wasm").to_vec(),
+                    )
+                    .then(
+                        ext_self::on_register_p3(
+                            title,
+                            underwriter,
+                            &env::current_account_id(),
+                            0,
+                            REGISTER_CALLBACK_GAS_FEE 
+                        )
+                    )
+        //     )
+        // } else {
+        //     // If register failed, dont do anything we have to revert
+        //     PromiseOrValue::Value(false)
+        // }
+    }
+
     // TODO: Finish gas needs
     /// Callback of the register function
-    /// Responsible for creating the account again, bonding to escrow holdings
-    /// Deploys a contract to the new account, must be initialed!
-    pub fn on_register(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> PromiseOrValue<bool> {
-        only_self();
-        if is_promise_success() {
-            // add to registry
-            self.accounts.insert(&title.to_string(), &underwriter.to_string());
-            log!("New deed: {}", &title);
+    /// Responsible for creating the account again, bonding to escrow ownership
+    #[payable]
+    #[private]
+    pub fn on_register_p1(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise { //OrValue<bool>  underwriter: ValidAccountId
+        // if is_promise_success() {
+            log!("Now im trying to create account");
 
             // now that account has been deleted, create again!
-            PromiseOrValue::Promise(
+            // PromiseOrValue::Promise(
                 ext_account_factory::create_account(
                     title.clone().to_string(),
                     Base58PublicKey::try_from(env::signer_account_pk()).unwrap(),
                     &self.factory_id,
-                    NEW_ACCOUNT_STORAGE_AMOUNT,
+                    env::attached_deposit(),
                     NEW_ACCOUNT_GAS_FEE
                 )
                 .then(
-                    // deploy deed contract, to allow final management
-                    Promise::new(underwriter.clone().to_string())
-                        .deploy_contract(
-                            include_bytes!("../../res/deed.wasm").to_vec(),
-                        )
-                        .then(
-                            ext_self::finalize_register(
-                                title,
-                                underwriter,
-                                &env::current_account_id(),
-                                0,
-                                REGISTER_CALLBACK_GAS_FEE 
-                            )
-                        )
+                    ext_self::on_register_p2(
+                        title,
+                        underwriter,
+                        &env::current_account_id(),
+                        0,
+                        REGISTER_CALLBACK_GAS_FEE
+                    )
                 )
-            )
-        } else {
-            // If register failed, dont do anything we have to revert
-            PromiseOrValue::Value(false)
-        }
+        //     )
+        // } else {
+        //     // If register failed, dont do anything we have to revert
+        //     PromiseOrValue::Value(false)
+        // }
     }
 
     // TODO: Finish gas needs
@@ -194,27 +210,119 @@ impl Escrow {
     ///
     // NOTE: Currenly only possible if this escrow account has a public key with full access to account, otherwise deploy is not possible.
     #[payable]
-    pub fn register(&mut self, underwriter: ValidAccountId) -> Promise {
-        let title = ValidAccountId::try_from(env::signer_account_id()).unwrap();
+    pub fn register(&mut self, title: ValidAccountId) -> Promise {
+        let underwriter = ValidAccountId::try_from(env::predecessor_account_id()).unwrap();
         // Make sure this account isnt already in escrow
         assert_ne!(self.accounts.contains_key(&title.to_string()), true, "Account already in escrow");
+        log!("Now im trying to delete account");
 
-        Promise::new(title.clone().to_string())
-            .function_call(
-                b"delete_self".to_vec(),
-                json!({}).to_string().as_bytes().to_vec(),
+        ext_transfer_owner::delete_self(
+                &title.to_string(),
                 0,
                 DELETE_ACCOUNT_GAS_FEE
             )
             .then(
-                ext_self::on_register(
+                ext_self::on_register_p1(
                     title,
                     underwriter,
                     &env::current_account_id(),
-                    0,
+                    env::attached_deposit(),
                     REGISTER_CALLBACK_GAS_FEE
                 )
             )
+    }
+
+    // TODO: REMOVE
+    /// Callback of the register function
+    /// Deploys a contract to the new account, must be initialed!
+    pub fn p2(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise { //OrValue<bool>
+        // if is_promise_success() {
+            log!("Now im trying to deploy deed");
+            // now that account has been deleted, create again!
+            // PromiseOrValue::Promise(
+                // deploy deed contract, to allow final management
+                Promise::new(title.clone().to_string())
+                    .deploy_contract(
+                        include_bytes!("../../res/deed.wasm").to_vec(),
+                    )
+                    // .then(
+                    //     ext_self::on_register_p3(
+                    //         title,
+                    //         underwriter,
+                    //         &env::current_account_id(),
+                    //         0,
+                    //         REGISTER_CALLBACK_GAS_FEE 
+                    //     )
+                    // )
+        //     )
+        // } else {
+        //     // If register failed, dont do anything we have to revert
+        //     PromiseOrValue::Value(false)
+        // }
+    }
+
+    pub fn p2a(&mut self, title: ValidAccountId) -> Promise { //OrValue<bool>
+        // if is_promise_success() {
+            log!("Now im trying to add access key");
+            // now that account has been deleted, create again!
+            // PromiseOrValue::Promise(
+                // deploy deed contract, to allow final management
+                Promise::new(title.clone().to_string())
+                    .add_full_access_key(self.pk.clone())
+                    .then(
+                        ext_self::p2(
+                            title,
+                            ValidAccountId::try_from(env::predecessor_account_id()).unwrap(),
+                            &env::current_account_id(),
+                            0,
+                            REGISTER_CALLBACK_GAS_FEE
+                        )
+                    )
+        //     )
+        // } else {
+        //     // If register failed, dont do anything we have to revert
+        //     PromiseOrValue::Value(false)
+        // }
+    }
+
+    // TODO: REMOVE
+    /// Callback of the register function
+    /// Responsible for creating the account again, bonding to escrow ownership
+    #[payable]
+    pub fn p1(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise { //OrValue<bool>  underwriter: ValidAccountId
+        // if is_promise_success() {
+            log!("Now im trying to create account");
+
+            // now that account has been deleted, create again!
+            // PromiseOrValue::Promise(
+                ext_account_factory::create_account(
+                    title.clone().to_string(),
+                    // Base58PublicKey::try_from(env::signer_account_pk()).unwrap(),
+                    Base58PublicKey::try_from(self.pk.clone()).unwrap(),
+                    &self.factory_id,
+                    env::attached_deposit(),
+                    NEW_ACCOUNT_GAS_FEE
+                )
+                .then(
+                    // ext_self::p2(
+                    //     title,
+                    //     ValidAccountId::try_from(env::predecessor_account_id()).unwrap(),
+                    //     &env::current_account_id(),
+                    //     0,
+                    //     REGISTER_CALLBACK_GAS_FEE
+                    // )
+                    ext_self::p2a(
+                        title,
+                        &env::current_account_id(),
+                        0,
+                        REGISTER_CALLBACK_GAS_FEE
+                    )
+                )
+        //     )
+        // } else {
+        //     // If register failed, dont do anything we have to revert
+        //     PromiseOrValue::Value(false)
+        // }
     }
 
     // TODO: Finish gas needs
@@ -289,7 +397,7 @@ impl Escrow {
     }
 
     fn is_underwriter(&self, title: ValidAccountId) {
-        assert_eq!(self.accounts.get(&title.to_string()).unwrap(), env::signer_account_id(), "Account cannot control escrow account");
+        assert_eq!(self.accounts.get(&title.to_string()).unwrap(), env::predecessor_account_id(), "Account cannot control escrow account");
     }
 }
 

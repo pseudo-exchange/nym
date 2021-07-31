@@ -5,6 +5,7 @@ use near_sdk::{
     collections::{ UnorderedMap, TreeMap},
     json_types::{ ValidAccountId, Base58PublicKey },
     serde_json::json,
+    serde::{Deserialize, Serialize},
     AccountId,
     Balance,
     BlockHeight,
@@ -23,15 +24,6 @@ pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
 const CLOSE_BLOCK_OFFSET: u64 = 600_000; // ~7 days
 const REVEAL_BLOCK_OFFSET: u64 = 260_000; // ~3 days
 
-// fn only_admin() {
-//     // require only admins
-//     assert_eq!(
-//         &env::current_account_id(),
-//         &env::signer_account_id(),
-//         "Only owner can execute this fn",
-//     )
-// }
-
 #[ext_contract]
 pub trait ExtEscrow {
     fn register(&mut self, underwriter: ValidAccountId);
@@ -41,7 +33,8 @@ pub trait ExtEscrow {
     fn update_escrow_settings(&mut self, auction_id: ValidAccountId);
 }
 
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault, Deserialize, Serialize)]
+#[serde(crate = "near_sdk::serde")]
 pub struct Bid {
     amount: Balance,
     pk: PublicKey,
@@ -49,6 +42,7 @@ pub struct Bid {
 }
 
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+// #[serde(crate = "near_sdk::serde")]
 pub struct Auction {
     pub title: AccountId,
     pub is_blind: bool,
@@ -87,9 +81,9 @@ impl AuctionHouse {
     /// Constructor:
     /// See notes regarding escrow contract, ownership & state  separation
     /// This method instantiates new auction house contract with baseline config
-    ///
+    /// 
     /// ```bash
-    /// near call _auction_ new '{"escrow_account_id": "escrow_account.testnet", "escrow_pk": "ed25591:jfsdofa..."}' --accountId youraccount.testnet
+    /// near deploy --wasmFile res/registrar.wasm --initFunction new --initArgs '{"escrow_account_id": "escrow_account.testnet", "escrow_pk": "ed25591:jfsdofa..."}' --accountId registrar_account.testnet
     /// ```
     #[init]
     pub fn new(escrow_account_id: ValidAccountId, escrow_pk: Base58PublicKey) -> Self {
@@ -105,9 +99,7 @@ impl AuctionHouse {
         }
     }
 
-    // TODO: Confirm an asset is not being auctioned again during an active auction
     // TODO: Check if this call originated from escrow?
-    // TODO: Create optional blind auction setup
     // TODO: Get fee
     /// Create Auction
     /// Allows a user to create a new auction for an account they own.
@@ -171,6 +163,7 @@ impl AuctionHouse {
         log!("New Auction:{}", &title.to_string());
 
         // TODO: Confirm escrow has custody
+        // TODO: Test triggering escrow::register here
     }
 
     // return single auction item
@@ -184,7 +177,9 @@ impl AuctionHouse {
             "close_block": auction.close_block,
             // TODO: Stringify this
             "bids": auction.bids.len(),
-            "reveals": auction.reveals.len()
+            "reveals": auction.reveals.len(),
+            // "bids": json!(auction.bids).to_string(),
+            // "reveals": auction.reveals.to_string()
         }).to_string()
     }
 
@@ -400,47 +395,51 @@ impl AuctionHouse {
         // Clear auction storage, since this is over
         self.auctions.remove(&id);
     }
+
+    /// Hash:
+    /// Tiny helper method to calculate a base58 hash of an amount + salt
+    ///
+    /// ```bash
+    /// near view _auction_ hash '{"amount": 10, "salt": "super_secret"}'
+    /// ```
+    pub fn hash(&self, amount: Balance, salt: String) ->  Vec<u8> {
+        bs58::encode(amount.to_string() + &salt).into_string().as_bytes().to_vec()
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use near_sdk::test_utils::{accounts, VMContextBuilder};
     use near_sdk::MockedBlockchain;
-    use near_sdk::{testing_env, VMContext};
+    use near_sdk::{testing_env};
+    use std::convert::TryFrom;
 
+    // registrar (me): Acct 0
+    // auction: Acct 1
+    // escrow: Acct 2
     fn create_blank_registrar() -> AuctionHouse {
         AuctionHouse::new(
-            ValidAccountId::from("escrow_near"),
-            Base58PublicKey { 0: vec![0, 1, 2] },
+            ValidAccountId::try_from("escrow_near").unwrap(),
+            Base58PublicKey::try_from("ed25519:AtysLvy7KGoE8pznUgXvSHa4vYyGvrDZFcT8jgb8PEQ6").unwrap(),
         )
     }
 
-    fn get_context(input: Vec<u8>, is_view: bool) -> VMContext {
-        VMContext {
-            current_account_id: "alice_near".to_string(),
-            signer_account_id: "bob_near".to_string(),
-            signer_account_pk: vec![0, 1, 2],
-            predecessor_account_id: "carol_near".to_string(),
-            input,
-            block_index: 0,
-            block_timestamp: 0,
-            account_balance: 0,
-            account_locked_balance: 0,
-            storage_usage: 0,
-            attached_deposit: 0,
-            prepaid_gas: 10u64.pow(18),
-            random_seed: vec![0, 1, 2],
-            is_view,
-            output_data_receivers: vec![],
-            epoch_height: 0,
-        }
+    fn get_context(c: ValidAccountId, s: ValidAccountId, p: ValidAccountId, is_view: Option<bool>) -> VMContextBuilder {
+        let mut builder = VMContextBuilder::new();
+        builder
+            .current_account_id(c)
+            .signer_account_id(s)
+            .predecessor_account_id(p)
+            .is_view(is_view.unwrap_or(false));
+        builder
     }
 
     #[test]
-    fn initialize_constructor() {
-        let context = get_context(vec![], true);
-        testing_env!(context);
+    fn test_init() {
+        let context = get_context(accounts(3), accounts(3), accounts(3), Some(false));
+        testing_env!(context.build());
         // Init with escrow data
         let contract = create_blank_registrar();
 
@@ -456,7 +455,7 @@ mod tests {
         );
 
         assert_eq!(
-            Base58PublicKey { 0: vec![0, 1, 2] },
+            b"ed25519:AtysLvy7KGoE8pznUgXvSHa4vYyGvrDZFcT8jgb8PEQ6".to_vec(),
             contract.escrow_pk.unwrap(),
             "Escrow account public key is set appropriately"
         );
@@ -472,8 +471,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Auction is already happening")]
     fn new_auction_item_same_during_auction() {
-        let mut context = get_context(vec![], true);
-        testing_env!(context.clone());
+        let mut context = get_context(accounts(3), accounts(3), accounts(3), Some(true));
+        testing_env!(context.build());
         // Init with escrow data
         let mut contract = create_blank_registrar();
         // ----------------------------------------------------------------
@@ -481,57 +480,61 @@ mod tests {
         // IF YOU ARE USING ANY TYPE OF PROMISE OR NON-VIEW FN,
         // YOU MUST CHANGE "is_view" TO SHOW THE TEST RUNNER TO DO THE SHITS
         // ----------------------------------------------------------------
-        context.is_view = false;
-        testing_env!(context.clone());
+        context.is_view(false);
+        testing_env!(context.build());
 
         // call the contract create twice, so we can panic when the auction item already exists
         // AND is active (within the current block height)
         contract.create(
-            "zanzibar_near".to_string(),
-            "yokohama_near".to_string(),
-            Some(1_000),
+            ValidAccountId::try_from("zanzibar_near").unwrap(),
+            ValidAccountId::try_from("yokohama_near").unwrap(),
             1 * ONE_NEAR,
+            Some(1_000),
+            Some(false)
         );
-        testing_env!(context.clone());
+        testing_env!(context.build());
         contract.create(
-            "zanzibar_near".to_string(),
-            "yokohama_near".to_string(),
-            Some(1_000),
+            ValidAccountId::try_from("zanzibar_near").unwrap(),
+            ValidAccountId::try_from("yokohama_near").unwrap(),
             1 * ONE_NEAR,
+            Some(1_000),
+            Some(false)
         );
     }
 
     #[test]
     #[should_panic(expected = "Auction cannot be signer name")]
     fn new_auction_item_not_same_as_signer() {
-        let context = get_context(vec![], true);
-        testing_env!(context);
+        let context = get_context(accounts(3), accounts(3), accounts(3), Some(false));
+        testing_env!(context.build());
         // Init with escrow data
         let mut contract = create_blank_registrar();
 
         // call the contract create twice, so we can panic when the auction item already exists
         // AND is active (within the current block height)
         contract.create(
-            "bob_near".to_string(),
-            env::signer_account_id(),
-            Some(env::block_index() + 1_000),
+            ValidAccountId::try_from("bob_near").unwrap(),
+            ValidAccountId::try_from(env::signer_account_id()).unwrap(),
             1 * ONE_NEAR,
+            Some(env::block_index() + 1_000),
+            Some(false)
         );
     }
 
     #[test]
     fn create_auction_item() {
-        let context = get_context(vec![], true);
-        testing_env!(context);
+        let context = get_context(accounts(3), accounts(3), accounts(3), Some(false));
+        testing_env!(context.build());
         // Init with escrow data
         let mut contract = create_blank_registrar();
 
         // check all the auction item THANGS
         contract.create(
-            "zanzibar_near".to_string(),
-            env::signer_account_id(),
-            Some(env::block_index() + 1_000),
+            ValidAccountId::try_from("zanzibar_near").unwrap(),
+            ValidAccountId::try_from(env::signer_account_id()).unwrap(),
             1 * ONE_NEAR,
+            Some(env::block_index() + 1_000),
+            Some(false)
         );
 
         assert_eq!(

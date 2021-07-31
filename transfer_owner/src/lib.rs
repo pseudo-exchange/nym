@@ -12,7 +12,8 @@ near_sdk::setup_alloc!();
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct TransferOwner {
     escrow: ValidAccountId,
-    beneficiary: ValidAccountId
+    beneficiary: ValidAccountId,
+    underwriter: ValidAccountId,
 }
 
 /// TransferOwner
@@ -25,13 +26,15 @@ impl TransferOwner {
     ///
     /// near deploy --wasmFile res/transfer_owner.wasm --initFunction new --initArgs '{"escrow": "escrow_account.testnet", "beneficiary": "otheraccount.testnet"}' --accountId YOUR_ACCOUNT.testnet
     #[init(ignore_state)]
-    pub fn new(escrow: ValidAccountId, beneficiary: ValidAccountId) -> Self {
+    pub fn new(escrow: ValidAccountId, beneficiary: ValidAccountId, underwriter: ValidAccountId) -> Self {
         assert_eq!(env::signer_account_id(), env::current_account_id(), "Signer must be able to relinquish ownership");
         assert_ne!(env::signer_account_id(), escrow.to_string(), "Escrow must not be original owner");
+        assert_ne!(env::current_account_id(), underwriter.to_string(), "Signer cannot be current account");
 
         TransferOwner {
             escrow,
-            beneficiary
+            beneficiary,
+            underwriter
         }
     }
 
@@ -42,6 +45,7 @@ impl TransferOwner {
     /// near call _account_here_ delete_self --accountId escrow_account.testnet
     pub fn delete_self(&self) -> Promise {
         assert_eq!(env::predecessor_account_id(), self.escrow.to_string(), "Unauthorized access, escrow only");
+        assert_eq!(env::signer_account_id(), self.underwriter.to_string(), "Signer must be the underwriter");
 
         // The scariest part of the code is also the simplest :)
         Promise::new(env::current_account_id())
