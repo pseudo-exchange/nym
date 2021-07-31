@@ -13,12 +13,14 @@ use near_sdk::{
 
 near_sdk::setup_alloc!();
 
-const REGISTER_GAS_FEE: u64 = 20_000_000_000_000; // 20 Tgas
+// TODO: Adjust these to minimums
+const STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
+const REGISTER_GAS_FEE: u64 = 50_000_000_000_000; // 50 Tgas
 const CALLBACK_GAS_FEE: u64 = 20_000_000_000_000; // 20 Tgas
 
 #[ext_contract(ext_escrow)]
 pub trait ExtEscrow {
-    fn register(&mut self);
+    fn register(&mut self, registrar: Option<ValidAccountId>);
 }
 
 #[ext_contract(ext_self)]
@@ -41,18 +43,26 @@ impl Deed {
     /// the account is available for any other ownership transfers
     ///
     /// ```bash
-    /// near deploy --wasmFile res/transfer_owner.wasm --initFunction new --initArgs '{"escrow": "escrow.testnet", "underwriter": "ACCOUNT_THAT_WILL_OWN.testnet"}' --accountId ACCOUNT_THAT_WILL_OWN.testnet --gas 300000000000000
+    /// near deploy --wasmFile res/deed.wasm --initFunction new --initArgs '{"escrow": "escrow.testnet", "underwriter": "ACCOUNT_THAT_WILL_OWN.testnet"}' --accountId ACCOUNT_THAT_WILL_OWN.testnet --gas 300000000000000
     /// ```
     #[init(ignore_state)]
     pub fn new(
         underwriter: ValidAccountId,
-        escrow: ValidAccountId
+        escrow: ValidAccountId,
+        registrar: Option<ValidAccountId>,
     ) -> Self {
         assert_eq!(env::signer_account_id(), env::current_account_id(), "Signer must have original ownership");
         assert_eq!(env::predecessor_account_id(), env::current_account_id(), "Signer must have original ownership");
 
+        // transfer any remaining balance to underwriter
+        // transfers ALL balance except whats needed for contract storage
+        let remaining_balance = core::cmp::max(env::account_balance() - STORAGE_COST, STORAGE_COST);
+        Promise::new(underwriter.to_string())
+            .transfer(remaining_balance);
+
         // register with escrow contract
         ext_escrow::register(
+            registrar,
             &escrow.to_string(),
             0,
             REGISTER_GAS_FEE,
@@ -68,7 +78,7 @@ impl Deed {
     /// IMPORTANT: pk MUST be the pk of the claimer's signing keys, otherwise they wont be able to own it!
     ///
     /// ```bash
-    /// near call escrow.testnet claim '{"pk": "ed25519:..."}' --accountId ACCOUNT_THAT_OWNS.testnet --gas 300000000000000
+    /// near call escrow.testnet claim '{"pk": "ed25519:Ggs1UC1z..."}' --accountId ACCOUNT_THAT_OWNS.testnet --gas 300000000000000
     /// ```
     pub fn change_ownership(&mut self, pk: Base58PublicKey) -> Promise {
         assert_eq!(env::predecessor_account_id(), self.escrow.to_string(), "Unauthorized access, escrow only");
@@ -120,9 +130,8 @@ mod tests {
     fn create_blank_account_manager() -> Deed {
         Deed::new(
             accounts(1),
-            Base58PublicKey::try_from("ed25519:Ggs1UC1zJpa1K11Q33H7KtA5TQ6ik7YoRpTyv3nkoA9o".to_string()).unwrap(),
             accounts(0),
-            Base58PublicKey::try_from("ed25519:4ZhGmuKTfQn9ZpHCQVRwEr4JnutL8Uu3kArfxEqksfVM".to_string()).unwrap()
+            Some(accounts(3))
         )
     }
 
@@ -143,7 +152,7 @@ mod tests {
         let context = get_context(accounts(1), accounts(1), accounts(0));
         testing_env!(context.build());
         let contract = create_blank_account_manager();
-        assert_eq!(contract.escrow_account_id, accounts(0));
+        assert_eq!(contract.escrow, accounts(0).to_string());
     }
 
     #[test]
@@ -152,19 +161,8 @@ mod tests {
         testing_env!(context.build());
         let mut contract = create_blank_account_manager();
 
-        contract.transfer_ownership(Base58PublicKey::try_from("ed25519:2mXmCTrFHMYTBv2kUEKGrKwk1wdT5EfXmFL85P6Xr9dV".to_string()).unwrap());
+        contract.change_ownership(Base58PublicKey::try_from("ed25519:2mXmCTrFHMYTBv2kUEKGrKwk1wdT5EfXmFL85P6Xr9dV".to_string()).unwrap());
 
-        assert_eq!(contract.escrow_account_id, accounts(0));
-    }
-
-    #[test]
-    fn test_revert_ownership() {
-        let context = get_context(accounts(1), accounts(1), accounts(0));
-        testing_env!(context.build());
-        let mut contract = create_blank_account_manager();
-
-        contract.revert_ownership();
-
-        assert_eq!(contract.escrow_account_id, accounts(0));
+        assert_eq!(contract.escrow, accounts(0).to_string());
     }
 }
