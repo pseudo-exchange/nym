@@ -3,7 +3,7 @@ use near_sdk::{
     ext_contract,
     borsh::{self, BorshDeserialize, BorshSerialize},
     collections::{ UnorderedMap, TreeMap},
-    json_types::{ ValidAccountId, Base58PublicKey },
+    json_types::{ ValidAccountId, Base58PublicKey, Base64VecU8, U128 },
     serde_json::json,
     serde::{Deserialize, Serialize},
     AccountId,
@@ -16,6 +16,7 @@ use near_sdk::{
     log,
     BorshStorageKey,
     StorageUsage,
+    Gas,
 };
 use bs58;
 
@@ -39,6 +40,51 @@ pub enum StorageKeys {
     Reveals,
 }
 
+#[derive(BorshDeserialize, BorshSerialize, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(crate = "near_sdk::serde")]
+pub struct Task {
+    pub owner_id: AccountId,
+    pub contract_id: AccountId,
+    pub function_id: String,
+    pub cadence: String,
+    pub recurring: bool,
+    pub total_deposit: U128,
+    pub deposit: U128,
+    pub gas: Gas,
+    pub arguments: Vec<u8>,
+}
+
+/// https://cron.cat
+/// REF: https://docs.cron.cat/docs/contract-integration/
+/// REF: https://github.com/Cron-Near/contracts
+#[ext_contract(ext_croncat)]
+pub trait ExtCroncat {
+    fn get_tasks(&self, offset: Option<u64>) -> (Vec<Base64VecU8>, U128);
+    fn get_all_tasks(&self, slot: Option<U128>) -> Vec<Task>;
+    fn get_task(&self, task_hash: Base64VecU8) -> Task;
+    fn create_task(
+        &mut self,
+        contract_id: String,
+        function_id: String,
+        cadence: String,
+        recurring: Option<bool>,
+        deposit: Option<U128>,
+        gas: Option<Gas>,
+        arguments: Option<Vec<u8>>,
+    ) -> Base64VecU8;
+    fn update_task(
+        &mut self,
+        task_hash: Base64VecU8,
+        cadence: Option<String>,
+        recurring: Option<bool>,
+        deposit: Option<U128>,
+        gas: Option<Gas>,
+        arguments: Option<Vec<u8>>,
+    );
+    fn remove_task(&mut self, task_hash: Base64VecU8);
+    fn proxy_call(&mut self);
+}
+
 #[ext_contract(ext)]
 pub trait ExtRegistrar {
     fn create_callback(
@@ -49,6 +95,11 @@ pub trait ExtRegistrar {
         is_blind: Option<bool>,
         #[callback]
         underwriter: Option<AccountId>,
+    );
+    fn cron_callback(
+        &self,
+        #[callback]
+        task_hash: Base64VecU8
     );
 }
 
@@ -73,6 +124,7 @@ pub struct Auction {
     pub underwriter: Option<AccountId>,
     pub winner_id: Option<AccountId>,
     pub close_block: Option<BlockHeight>,
+    pub cron_hash: Option<Base64VecU8>,
     bids: UnorderedMap<AccountId, Bid>,
     reveals: TreeMap<Balance, AccountId>,
 }
@@ -90,7 +142,10 @@ pub struct Registrar {
     // Admin only
     pub escrow: AccountId,
     pub dao: Option<AccountId>,
+    pub cron: Option<AccountId>,
     pub paused: bool,
+
+    // Base fee will cover things like covering cost of refunding bids in cancel, scheduling cron close, etc
     pub base_fee: Balance,
     pub base_storage_usage: StorageUsage,
 }
@@ -102,10 +157,14 @@ impl Registrar {
     /// This method instantiates new registrar contract with baseline config
     /// 
     /// ```bash
-    /// near deploy --wasmFile res/registrar.wasm --initFunction new --initArgs '{"escrow_account_id": "escrow_account.testnet", "escrow_pk": "ed25591:jfsdofa..."}' --accountId registrar_account.testnet
+    /// near deploy --wasmFile res/registrar.wasm --initFunction new --initArgs '{"escrow": "escrow_account.testnet", "dao": "dao.sputnik.testnet", "cron": "cron.in.testnet"}' --accountId registrar_account.testnet
     /// ```
     #[init]
-    pub fn new(escrow: ValidAccountId, dao: Option<ValidAccountId>) -> Self {
+    pub fn new(
+        escrow: ValidAccountId,
+        dao: Option<ValidAccountId>,
+        cron: Option<ValidAccountId>
+    ) -> Self {
         // Make absolutely sure this contract doesnt get state removed easily
         // TODO: Change to support migrations
         assert!(!env::state_exists(), "The contract is already initialized");
@@ -118,6 +177,7 @@ impl Registrar {
             auctions: UnorderedMap::new(StorageKeys::Auctions),
             escrow: escrow.to_string(),
             dao: Some(dao.unwrap().to_string()),
+            cron: Some(cron.unwrap().to_string()),
             total_auctions: 0,
             total_canceled_auctions: 0,
             total_completed_auctions: 0,
@@ -138,6 +198,7 @@ impl Registrar {
             underwriter: Some(tmp_account_id.clone()),
             winner_id: Some(tmp_account_id.clone()),
             close_block: Some(env::block_index()),
+            cron_hash: None,
             bids: UnorderedMap::new(b"a".to_vec()),
             reveals: TreeMap::new(b"b"),
         };
@@ -226,14 +287,50 @@ impl Registrar {
             underwriter: Some(owner),
             winner_id: None,
             close_block: Some(close_block),
+            cron_hash: None,
             bids: UnorderedMap::new(StorageKeys::Bids),
             reveals: TreeMap::new(StorageKeys::Reveals)
         };
 
         self.auctions.insert(&title.to_string(), &auction);
+        self.total_auctions += 1;
         log!("New Auction:{}", &title.to_string());
 
-        self.total_auctions += 1;
+        // Schedule the closing of auction with cron.cat
+        ext_croncat::create_task(
+            env::current_account_id(),
+            String::from("finalize_auction"),
+            close_block.to_string(),
+            Some(false),
+            Some(U128::from(0)),
+            Some(140_000_000_000_000), // 140 Tgas
+            Some(json!({ "id": &title.to_string() }).to_string().as_bytes().to_vec()),
+            &String::from("cron.in.testnet"),
+            ONE_NEAR / 100_000,
+            100_000_000_000_000,
+        )
+        .then(
+            ext::cron_callback(
+                &env::current_account_id(),
+                0,
+                25_000_000_000_000 // 25 Tgas
+            )
+        );
+    }
+
+    /// Get the task hash, and store in state
+    #[private]
+    pub fn cron_callback(
+        &mut self,
+        #[callback]
+        id: AccountId,
+        #[callback]
+        task_hash: Base64VecU8
+    ) {
+        log!("schedule_callback task_hash {:?}", &task_hash);
+        let mut auc = self.auctions.get(&id).expect("Auction doesnt exist");
+        auc.cron_hash = Some(task_hash);
+        self.auctions.insert(&id, &auc);
     }
 
     /// Bid:
@@ -577,6 +674,7 @@ mod tests {
         Registrar::new(
             ValidAccountId::try_from("escrow_near").unwrap(),
             Some(ValidAccountId::try_from("dao_near").unwrap()),
+            Some(ValidAccountId::try_from("cron_near").unwrap()),
         )
     }
 
