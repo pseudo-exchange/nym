@@ -22,7 +22,7 @@ use bs58;
 near_sdk::setup_alloc!();
 
 pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
-const AUCTION_STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
+// const AUCTION_STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
 // const ACCESS_KEY_ALLOWANCE: u128 = 1_000_000_000_000_000_000_000;
 const CHECK_UNDERWRITER_GAS_FEE: u64 = 5_000_000_000_000; // 5 Tgas
 const CREATE_CALLBACK_GAS_FEE: u64 = 150_000_000_000_000; // 150 Tgas
@@ -58,7 +58,7 @@ pub trait ExtEscrow {
     fn close_escrow(&mut self, title: AccountId, new_key: PublicKey) -> Promise;
 }
 
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault, Deserialize, Serialize)]
+#[derive(BorshDeserialize, BorshSerialize, Debug, Serialize, Deserialize, PartialEq, PanicOnDefault)]
 #[serde(crate = "near_sdk::serde")]
 pub struct Bid {
     amount: Balance,
@@ -66,33 +66,35 @@ pub struct Bid {
     precommit: Option<Vec<u8>>
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Serialize, PanicOnDefault)]
-#[serde(crate = "near_sdk::serde")]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Auction {
     pub title: AccountId,
     pub is_blind: bool,
     pub underwriter: Option<AccountId>,
     pub winner_id: Option<AccountId>,
     pub close_block: Option<BlockHeight>,
-    pub bids: UnorderedMap<AccountId, Bid>,
+    bids: UnorderedMap<AccountId, Bid>,
     reveals: TreeMap<Balance, AccountId>,
 }
 
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, Serialize, PanicOnDefault)]
-#[serde(crate = "near_sdk::serde")]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Registrar {
-    pub paused: bool,
-    pub base_fee: Balance,
-    pub base_storage_usage: StorageUsage,
     auctions: UnorderedMap<AccountId, Auction>,
+
+    // stats
+    total_auctions: u64,
+    total_canceled_auctions: u64,
+    total_completed_auctions: u64,
 
     // Admin only
     pub escrow: AccountId,
     pub dao: Option<AccountId>,
+    pub paused: bool,
+    pub base_fee: Balance,
+    pub base_storage_usage: StorageUsage,
 }
 
-// TODO: Add admin FNs for pause/unpause
 #[near_bindgen]
 impl Registrar {
     /// Constructor:
@@ -116,6 +118,9 @@ impl Registrar {
             auctions: UnorderedMap::new(StorageKeys::Auctions),
             escrow: escrow.to_string(),
             dao: Some(dao.unwrap().to_string()),
+            total_auctions: 0,
+            total_canceled_auctions: 0,
+            total_completed_auctions: 0,
         };
         // compute storage needs before finishing
         this.measure_account_storage_usage();
@@ -171,6 +176,8 @@ impl Registrar {
             );
         }
 
+        // TODO: Check it can cover costs
+
         // Confirm escrow has custody
         ext_escrow::get_underwriter(
             title.clone(),
@@ -225,32 +232,8 @@ impl Registrar {
 
         self.auctions.insert(&title.to_string(), &auction);
         log!("New Auction:{}", &title.to_string());
-    }
 
-    // // return single auction item
-    // ///
-    // /// ```bash
-    // /// near view _auction_ get_auction_byid '{"id": "account_to_auction.testnet"}'
-    // /// ```
-    // pub fn get_auction_byid(&self, id: AccountId) -> Option<Auction> {
-    //     self.auctions.get(&id)
-    // }
-
-    // return single auction item
-    pub fn get_auction_by_id(&self, id: AccountId) -> String {
-        let auction = self.auctions.get(&id).expect("No auction found");
-
-        json!({
-            "underwriter": auction.underwriter,
-            "winner_id": auction.winner_id.unwrap(),
-            "title": auction.title,
-            "close_block": auction.close_block,
-            // TODO: Stringify this
-            "bids": auction.bids.len(),
-            "reveals": auction.reveals.len(),
-            // "bids": json!(auction.bids).to_string(),
-            // "reveals": auction.reveals.to_string()
-        }).to_string()
+        self.total_auctions += 1;
     }
 
     /// Bid:
@@ -399,6 +382,7 @@ impl Registrar {
 
         // Clear auction storage, since this is over
         self.auctions.remove(&id);
+        self.total_canceled_auctions += 1;
     }
 
     /// Finalize Auction:
@@ -464,6 +448,105 @@ impl Registrar {
 
         // Clear auction storage, since this is over
         self.auctions.remove(&id);
+        self.total_completed_auctions += 1;
+    }
+
+    /// Get the current list of auctions
+    ///
+    /// ```bash
+    /// near view _auction_ get_auction_keys
+    /// ```
+    pub fn get_auction_keys(&self) -> Vec<AccountId> {
+        self.auctions.keys().collect()
+    }
+
+    /// return single auction item
+    ///
+    /// ```bash
+    /// near view _auction_ get_auction_byid '{"id": "account_to_auction.testnet"}'
+    /// ```
+    pub fn get_auction_by_id(&self, id: AccountId) -> String {
+        let auction = self.auctions.get(&id).expect("No auction found");
+
+        json!({
+            "underwriter": auction.underwriter,
+            "winner_id": auction.winner_id.unwrap(),
+            "title": auction.title,
+            "close_block": auction.close_block,
+            // TODO: Stringify this
+            "bids": auction.bids.len(),
+            "reveals": auction.reveals.len(),
+            // "bids": json!(auction.bids).to_string(),
+            // "reveals": auction.reveals.to_string()
+        }).to_string()
+    }
+
+    /// Gets settings
+    ///
+    /// ```bash
+    /// near view _auction_ get_settings
+    /// ```
+    pub fn get_settings(&self) -> (
+        bool,
+        Balance,
+        StorageUsage,
+        AccountId,
+        Option<AccountId>,
+    ) {
+        (
+            self.paused,
+            self.base_fee,
+            self.base_storage_usage,
+            self.escrow.clone(),
+            self.dao.clone(),
+        )
+    }
+
+    /// change the contract basic parameters, in case of needing to upgrade
+    /// or change to different account IDs later.
+    /// Can only be called by the DAO contract (if originally configured)
+    ///
+    /// ```bash
+    /// near call _auction_ update_settings '{"dao": "dao.sputnik.testnet", "registrar": "registrar.alias.testnet"}' --accountId dao.sputnik.testnet
+    /// ```
+    pub fn update_settings(
+        &mut self,
+        paused: Option<bool>,
+        base_fee: Option<Balance>,
+        escrow: Option<AccountId>,
+        dao: Option<AccountId>,
+    ) {
+        assert!(self.dao.is_some(), "No ownership, cannot change settings");
+        assert_eq!(self.dao.clone().unwrap(), env::predecessor_account_id(), "Callee must be dao contract");
+        
+        // Update each individual setting
+        if paused.is_some() { self.paused = paused.unwrap(); }
+        if base_fee.is_some() { self.base_fee = base_fee.unwrap(); }
+        if escrow.is_some() { self.escrow = escrow.unwrap().to_string(); }
+        if dao.is_some() { self.dao = dao; }
+    }
+
+    /// Returns semver of this contract.
+    ///
+    /// ```bash
+    /// near view _auction_ version
+    /// ```
+    pub fn version(&self) -> String {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    /// Returns semver of this contract.
+    ///
+    /// ```bash
+    /// near view _auction_ stats
+    /// ```
+    pub fn stats(&self) -> (u64, u64, u64, u64) {
+        (
+            self.auctions.len(),
+            self.total_auctions,
+            self.total_canceled_auctions,
+            self.total_completed_auctions,
+        )
     }
 
     /// Hash:
