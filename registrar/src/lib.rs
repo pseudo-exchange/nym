@@ -26,6 +26,7 @@ const AUCTION_STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
 // const ACCESS_KEY_ALLOWANCE: u128 = 1_000_000_000_000_000_000_000;
 const CHECK_UNDERWRITER_GAS_FEE: u64 = 5_000_000_000_000; // 5 Tgas
 const CREATE_CALLBACK_GAS_FEE: u64 = 150_000_000_000_000; // 150 Tgas
+const CLOSE_ESCROW_GAS_FEE: u64 = 50_000_000_000_000; // 50 Tgas
 const CLOSE_BLOCK_OFFSET: u64 = 600_000; // ~7 days
 const REVEAL_BLOCK_OFFSET: u64 = 260_000; // ~3 days
 
@@ -44,7 +45,6 @@ pub trait ExtRegistrar {
         &mut self,
         title: ValidAccountId,
         signer: AccountId,
-        auction_start_bid_amount: Balance,
         auction_close_block: Option<BlockHeight>,
         is_blind: Option<bool>,
         #[callback]
@@ -66,25 +66,26 @@ pub struct Bid {
     precommit: Option<Vec<u8>>
 }
 
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
-// #[serde(crate = "near_sdk::serde")]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, PanicOnDefault)]
+#[serde(crate = "near_sdk::serde")]
 pub struct Auction {
     pub title: AccountId,
     pub is_blind: bool,
     pub underwriter: Option<AccountId>,
     pub winner_id: Option<AccountId>,
     pub close_block: Option<BlockHeight>,
-    bids: UnorderedMap<AccountId, Bid>,
+    pub bids: UnorderedMap<AccountId, Bid>,
     reveals: TreeMap<Balance, AccountId>,
 }
 
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, PanicOnDefault)]
+#[serde(crate = "near_sdk::serde")]
 pub struct Registrar {
     pub paused: bool,
     pub base_fee: Balance,
     pub base_storage_usage: StorageUsage,
-    pub auctions: UnorderedMap<AccountId, Auction>,
+    auctions: UnorderedMap<AccountId, Auction>,
 
     // Admin only
     pub escrow: AccountId,
@@ -127,10 +128,10 @@ impl Registrar {
         // Create a temporary, dummy entry and measure the storage used.
         let tmp_account_id = "z".repeat(64);
         let tmp_auction = Auction {
-            title: tmp_account_id,
+            title: tmp_account_id.clone(),
             is_blind: true,
-            underwriter: Some(tmp_account_id),
-            winner_id: Some(tmp_account_id),
+            underwriter: Some(tmp_account_id.clone()),
+            winner_id: Some(tmp_account_id.clone()),
             close_block: Some(env::block_index()),
             bids: UnorderedMap::new(b"a".to_vec()),
             reveals: TreeMap::new(b"b"),
@@ -151,19 +152,18 @@ impl Registrar {
     /// auction reveals: 3 Days
     ///
     /// ```bash
-    /// near call _auction_ create '{"title": "account_to_auction.testnet", "auction_start_bid_amount": 1, "auction_close_block": 41000000, "is_blind": true}' --accountId youraccount.testnet
+    /// near call _auction_ create '{"title": "account_to_auction.testnet", "auction_close_block": 41000000, "is_blind": true}' --accountId youraccount.testnet
     /// ```
     #[payable]
     pub fn create(
         &mut self,
         title: ValidAccountId,
-        auction_start_bid_amount: Balance,
         auction_close_block: Option<BlockHeight>,
         is_blind: Option<bool>
     ) {
         // Check if there is already an auction with this same matching title
         // AND if that auction is ongoing (ongoing = current block < closing block)
-        let previous_auction = self.auctions.get(&title.to_string());
+        let previous_auction = self.auctions.get(&title.clone().to_string());
         if previous_auction.is_some() {
             assert!(
                 env::block_index() > previous_auction.unwrap().close_block.unwrap(),
@@ -173,7 +173,7 @@ impl Registrar {
 
         // Confirm escrow has custody
         ext_escrow::get_underwriter(
-            title,
+            title.clone(),
             &self.escrow,
             0,
             CHECK_UNDERWRITER_GAS_FEE
@@ -181,7 +181,6 @@ impl Registrar {
             ext::create_callback(
                 title,
                 env::signer_account_id(),
-                auction_start_bid_amount,
                 auction_close_block,
                 is_blind,
                 &env::current_account_id(),
@@ -198,7 +197,6 @@ impl Registrar {
         &mut self,
         title: ValidAccountId,
         signer: AccountId,
-        auction_start_bid_amount: Balance,
         auction_close_block: Option<BlockHeight>,
         is_blind: Option<bool>,
         #[callback]
@@ -229,14 +227,14 @@ impl Registrar {
         log!("New Auction:{}", &title.to_string());
     }
 
-    // return single auction item
-    ///
-    /// ```bash
-    /// near view _auction_ get_auction_byid '{"id": "account_to_auction.testnet"}'
-    /// ```
-    pub fn get_auction_byid(&self, id: AccountId) -> Option<Auction> {
-        self.auctions.get(&id)
-    }
+    // // return single auction item
+    // ///
+    // /// ```bash
+    // /// near view _auction_ get_auction_byid '{"id": "account_to_auction.testnet"}'
+    // /// ```
+    // pub fn get_auction_byid(&self, id: AccountId) -> Option<Auction> {
+    //     self.auctions.get(&id)
+    // }
 
     // return single auction item
     pub fn get_auction_by_id(&self, id: AccountId) -> String {
@@ -408,6 +406,7 @@ impl Registrar {
     /// - all bidders get their bid amounts back, minus fees
     ///
     /// NOTE: anyone can call this method, as it is paid by the person wanting the final outcome
+    /// NOTE: cron.cat can also execute this function immediately after the close block
     ///
     /// ```bash
     /// near call _auction_ finalize_auction '{"id": "auctioned_account.testnet"}' --accountId youraccount.testnet
@@ -458,10 +457,9 @@ impl Registrar {
         ext_escrow::close_escrow(
             id.clone(),
             winner_pk,
-            &self.escrow_account_id.clone().unwrap(),
+            &self.escrow,
             0,
-            // TODO: Change to better value
-            env::prepaid_gas() / 3
+            CLOSE_ESCROW_GAS_FEE,
         );
 
         // Clear auction storage, since this is over
@@ -495,7 +493,7 @@ mod tests {
     fn create_blank_registrar() -> Registrar {
         Registrar::new(
             ValidAccountId::try_from("escrow_near").unwrap(),
-            Base58PublicKey::try_from("ed25519:AtysLvy7KGoE8pznUgXvSHa4vYyGvrDZFcT8jgb8PEQ6").unwrap(),
+            Some(ValidAccountId::try_from("dao_near").unwrap()),
         )
     }
 
@@ -523,14 +521,8 @@ mod tests {
 
         assert_eq!(
             "escrow_near".to_string(),
-            contract.escrow_account_id.unwrap(),
+            contract.escrow,
             "Escrow account ID is set appropriately"
-        );
-
-        assert_eq!(
-            b"ed25519:AtysLvy7KGoE8pznUgXvSHa4vYyGvrDZFcT8jgb8PEQ6".to_vec(),
-            contract.escrow_pk.unwrap(),
-            "Escrow account public key is set appropriately"
         );
 
         // TODO: Figure out how to test this!
@@ -560,16 +552,12 @@ mod tests {
         // AND is active (within the current block height)
         contract.create(
             ValidAccountId::try_from("zanzibar_near").unwrap(),
-            ValidAccountId::try_from("yokohama_near").unwrap(),
-            1 * ONE_NEAR,
-            Some(1_000),
+            Some(env::block_index() + 1_000),
             Some(false)
         );
         testing_env!(context.build());
         contract.create(
             ValidAccountId::try_from("zanzibar_near").unwrap(),
-            ValidAccountId::try_from("yokohama_near").unwrap(),
-            1 * ONE_NEAR,
             Some(1_000),
             Some(false)
         );
@@ -587,8 +575,6 @@ mod tests {
         // AND is active (within the current block height)
         contract.create(
             ValidAccountId::try_from("bob_near").unwrap(),
-            ValidAccountId::try_from(env::signer_account_id()).unwrap(),
-            1 * ONE_NEAR,
             Some(env::block_index() + 1_000),
             Some(false)
         );
@@ -604,8 +590,6 @@ mod tests {
         // check all the auction item THANGS
         contract.create(
             ValidAccountId::try_from("zanzibar_near").unwrap(),
-            ValidAccountId::try_from(env::signer_account_id()).unwrap(),
-            1 * ONE_NEAR,
             Some(env::block_index() + 1_000),
             Some(false)
         );
