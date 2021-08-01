@@ -26,7 +26,7 @@ pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
 // const AUCTION_STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
 // const ACCESS_KEY_ALLOWANCE: u128 = 1_000_000_000_000_000_000_000;
 const CHECK_UNDERWRITER_GAS_FEE: u64 = 5_000_000_000_000; // 5 Tgas
-const CREATE_CALLBACK_GAS_FEE: u64 = 150_000_000_000_000; // 150 Tgas
+const CREATE_CALLBACK_GAS_FEE: u64 = 50_000_000_000_000; // 50 Tgas
 const CLOSE_ESCROW_GAS_FEE: u64 = 50_000_000_000_000; // 50 Tgas
 const CLOSE_BLOCK_OFFSET: u64 = 600_000; // ~7 days
 const REVEAL_BLOCK_OFFSET: u64 = 260_000; // ~3 days
@@ -567,7 +567,7 @@ impl Registrar {
 
         json!({
             "underwriter": auction.underwriter,
-            "winner_id": auction.winner_id.unwrap(),
+            "winner_id": auction.winner_id.unwrap_or_default(),
             "title": auction.title,
             "close_block": auction.close_block,
             // TODO: Stringify this
