@@ -13,24 +13,49 @@ use near_sdk::{
     Promise,
     PublicKey,
     env,
-    log
+    log,
+    BorshStorageKey,
+    StorageUsage,
 };
 use bs58;
 
 near_sdk::setup_alloc!();
 
 pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
+const AUCTION_STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
 // const ACCESS_KEY_ALLOWANCE: u128 = 1_000_000_000_000_000_000_000;
+const CHECK_UNDERWRITER_GAS_FEE: u64 = 5_000_000_000_000; // 5 Tgas
+const CREATE_CALLBACK_GAS_FEE: u64 = 150_000_000_000_000; // 150 Tgas
 const CLOSE_BLOCK_OFFSET: u64 = 600_000; // ~7 days
 const REVEAL_BLOCK_OFFSET: u64 = 260_000; // ~3 days
 
-#[ext_contract]
+// TODO: Cron fee & schedule setup
+
+#[derive(BorshStorageKey, BorshSerialize)]
+pub enum StorageKeys {
+    Auctions,
+    Bids,
+    Reveals,
+}
+
+#[ext_contract(ext)]
+pub trait ExtRegistrar {
+    fn create_callback(
+        &mut self,
+        title: ValidAccountId,
+        signer: AccountId,
+        auction_start_bid_amount: Balance,
+        auction_close_block: Option<BlockHeight>,
+        is_blind: Option<bool>,
+        #[callback]
+        underwriter: Option<AccountId>,
+    );
+}
+
+#[ext_contract(ext_escrow)]
 pub trait ExtEscrow {
-    fn register(&mut self, underwriter: ValidAccountId);
-    fn in_escrow(&self, title: ValidAccountId) -> bool;
-    fn revert_title(&mut self, title: AccountId) -> Promise;
+    fn get_underwriter(&self, title: ValidAccountId) -> Option<AccountId>;
     fn close_escrow(&mut self, title: AccountId, new_key: PublicKey) -> Promise;
-    fn update_escrow_settings(&mut self, auction_id: ValidAccountId);
 }
 
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault, Deserialize, Serialize)]
@@ -54,55 +79,70 @@ pub struct Auction {
 }
 
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize)]
-pub struct AuctionHouse {
-    pub auctions: UnorderedMap<AccountId, Auction>,
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+pub struct Registrar {
     pub paused: bool,
-    pub escrow_account_id: Option<AccountId>,
-    pub escrow_pk: Option<PublicKey>,
     pub base_fee: Balance,
-}
+    pub base_storage_usage: StorageUsage,
+    pub auctions: UnorderedMap<AccountId, Auction>,
 
-impl Default for AuctionHouse {
-    fn default() -> Self {
-        AuctionHouse {
-            paused: false,
-            escrow_account_id: None,
-            escrow_pk: None,
-            auctions: UnorderedMap::new(b"a".to_vec()),
-            base_fee: ONE_NEAR / 100_000,
-        }
-    }
+    // Admin only
+    pub escrow: AccountId,
+    pub dao: Option<AccountId>,
 }
 
 // TODO: Add admin FNs for pause/unpause
 #[near_bindgen]
-impl AuctionHouse {
+impl Registrar {
     /// Constructor:
-    /// See notes regarding escrow contract, ownership & state  separation
-    /// This method instantiates new auction house contract with baseline config
+    /// See notes regarding escrow contract, ownership & state separation
+    /// This method instantiates new registrar contract with baseline config
     /// 
     /// ```bash
     /// near deploy --wasmFile res/registrar.wasm --initFunction new --initArgs '{"escrow_account_id": "escrow_account.testnet", "escrow_pk": "ed25591:jfsdofa..."}' --accountId registrar_account.testnet
     /// ```
     #[init]
-    pub fn new(escrow_account_id: ValidAccountId, escrow_pk: Base58PublicKey) -> Self {
+    pub fn new(escrow: ValidAccountId, dao: Option<ValidAccountId>) -> Self {
         // Make absolutely sure this contract doesnt get state removed easily
+        // TODO: Change to support migrations
         assert!(!env::state_exists(), "The contract is already initialized");
+        assert_eq!(env::current_account_id(), env::predecessor_account_id(), "Must be called by owner");
 
-        AuctionHouse {
+        let mut this = Registrar {
             paused: false,
-            auctions: UnorderedMap::new(b"a".to_vec()),
-            escrow_account_id: Some(escrow_account_id.to_string()),
-            escrow_pk: Some(escrow_pk.into()),
             base_fee: ONE_NEAR / 100_000,
-        }
+            base_storage_usage: 0,
+            auctions: UnorderedMap::new(StorageKeys::Auctions),
+            escrow: escrow.to_string(),
+            dao: Some(dao.unwrap().to_string()),
+        };
+        // compute storage needs before finishing
+        this.measure_account_storage_usage();
+        this
     }
 
-    // TODO: Check if this call originated from escrow?
-    // TODO: Get fee
+    /// Measure the storage an agent will take and need to provide
+    fn measure_account_storage_usage(&mut self) {
+        let initial_storage_usage = env::storage_usage();
+        // Create a temporary, dummy entry and measure the storage used.
+        let tmp_account_id = "z".repeat(64);
+        let tmp_auction = Auction {
+            title: tmp_account_id,
+            is_blind: true,
+            underwriter: Some(tmp_account_id),
+            winner_id: Some(tmp_account_id),
+            close_block: Some(env::block_index()),
+            bids: UnorderedMap::new(b"a".to_vec()),
+            reveals: TreeMap::new(b"b"),
+        };
+        self.auctions.insert(&tmp_account_id, &tmp_auction);
+        self.base_storage_usage = env::storage_usage() - initial_storage_usage;
+        // Remove the temporary entry.
+        self.auctions.remove(&tmp_account_id);
+    }
+
     /// Create Auction
-    /// Allows a user to create a new auction for an account they own.
+    /// Allows an underwriter to create a new auction for an account they own.
     /// The underwriter is the original owner or another account that takes ownership in the event
     /// the auction closes with no winner or underwriter wants to claim the account back before auction close.
     /// 
@@ -111,23 +151,62 @@ impl AuctionHouse {
     /// auction reveals: 3 Days
     ///
     /// ```bash
-    /// near call _auction_ create '{"title": "account_to_auction.testnet", "underwriter": "your_other_account.testnet", "auction_start_bid_amount": 1, "auction_close_block": 41000000, "is_blind": true}' --accountId youraccount.testnet
+    /// near call _auction_ create '{"title": "account_to_auction.testnet", "auction_start_bid_amount": 1, "auction_close_block": 41000000, "is_blind": true}' --accountId youraccount.testnet
     /// ```
     #[payable]
-    #[allow(unused_variables)] // TODO: remove when impl done
     pub fn create(
         &mut self,
         title: ValidAccountId,
-        underwriter: ValidAccountId,
         auction_start_bid_amount: Balance,
         auction_close_block: Option<BlockHeight>,
         is_blind: Option<bool>
     ) {
-        assert_eq!(
-            &title.to_string(),
-            &env::signer_account_id(),
-            "Auction must be signer name"
+        // Check if there is already an auction with this same matching title
+        // AND if that auction is ongoing (ongoing = current block < closing block)
+        let previous_auction = self.auctions.get(&title.to_string());
+        if previous_auction.is_some() {
+            assert!(
+                env::block_index() > previous_auction.unwrap().close_block.unwrap(),
+                "Auction is already happening"
+            );
+        }
+
+        // Confirm escrow has custody
+        ext_escrow::get_underwriter(
+            title,
+            &self.escrow,
+            0,
+            CHECK_UNDERWRITER_GAS_FEE
+        ).then(
+            ext::create_callback(
+                title,
+                env::signer_account_id(),
+                auction_start_bid_amount,
+                auction_close_block,
+                is_blind,
+                &env::current_account_id(),
+                env::attached_deposit(),
+                CREATE_CALLBACK_GAS_FEE,
+            )
         );
+    }
+
+    /// Create Auction Callback
+    #[private]
+    #[payable]
+    pub fn create_callback(
+        &mut self,
+        title: ValidAccountId,
+        signer: AccountId,
+        auction_start_bid_amount: Balance,
+        auction_close_block: Option<BlockHeight>,
+        is_blind: Option<bool>,
+        #[callback]
+        underwriter: Option<AccountId>,
+    ) {
+        // Check the signer IS the underwriter
+        let owner = underwriter.expect("No underwriter found, abort");
+        assert_eq!(&signer, &owner, "Auction can only be started by owner");
 
         let close_block = match auction_close_block {
             Some(close_block) => {
@@ -139,31 +218,24 @@ impl AuctionHouse {
         let auction = Auction {
             title: title.to_string(),
             is_blind: is_blind.unwrap_or(false),
-            underwriter: Some(underwriter.to_string()),
+            underwriter: Some(owner),
             winner_id: None,
             close_block: Some(close_block),
-            bids: UnorderedMap::new(b"a".to_vec()),
-            reveals: TreeMap::new(b"b")
+            bids: UnorderedMap::new(StorageKeys::Bids),
+            reveals: TreeMap::new(StorageKeys::Reveals)
         };
-
-        // Check if there is already an auction with this same matching title
-        // AND if that auction is ongoing (ongoing = current block < closing block)
-        let previous_auction = self.auctions.get(&title.to_string());
-        match previous_auction {
-            Some(previous_auction) => {
-                assert!(
-                    env::block_index() > previous_auction.close_block.unwrap(),
-                    "Auction is already happening"
-                );
-            }
-            None => (),
-        }
 
         self.auctions.insert(&title.to_string(), &auction);
         log!("New Auction:{}", &title.to_string());
+    }
 
-        // TODO: Confirm escrow has custody
-        // TODO: Test triggering escrow::register here
+    // return single auction item
+    ///
+    /// ```bash
+    /// near view _auction_ get_auction_byid '{"id": "account_to_auction.testnet"}'
+    /// ```
+    pub fn get_auction_byid(&self, id: AccountId) -> Option<Auction> {
+        self.auctions.get(&id)
     }
 
     // return single auction item
@@ -306,7 +378,7 @@ impl AuctionHouse {
         );
         assert_eq!(
             auction.underwriter.unwrap(),
-            env::signer_account_id(),
+            env::predecessor_account_id(),
             "Must be owner to cancel auction"
         );
 
@@ -319,12 +391,12 @@ impl AuctionHouse {
         }
 
         // Release from escrow
-        ext_escrow::revert_title(
+        ext_escrow::close_escrow(
             id.clone(),
-            &self.escrow_account_id.clone().unwrap(),
+            env::signer_account_pk(),
+            &self.escrow,
             0,
-            // TODO: Change to better value
-            env::prepaid_gas() / 3
+            CLOSE_ESCROW_GAS_FEE,
         );
 
         // Clear auction storage, since this is over
@@ -398,6 +470,7 @@ impl AuctionHouse {
 
     /// Hash:
     /// Tiny helper method to calculate a base58 hash of an amount + salt
+    /// NOTE: using the command below should only be used for testing, network requests reveal real information to RPC runners.
     ///
     /// ```bash
     /// near view _auction_ hash '{"amount": 10, "salt": "super_secret"}'
@@ -419,8 +492,8 @@ mod tests {
     // registrar (me): Acct 0
     // auction: Acct 1
     // escrow: Acct 2
-    fn create_blank_registrar() -> AuctionHouse {
-        AuctionHouse::new(
+    fn create_blank_registrar() -> Registrar {
+        Registrar::new(
             ValidAccountId::try_from("escrow_near").unwrap(),
             Base58PublicKey::try_from("ed25519:AtysLvy7KGoE8pznUgXvSHa4vYyGvrDZFcT8jgb8PEQ6").unwrap(),
         )

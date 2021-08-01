@@ -51,6 +51,7 @@ near call _escrow_account_ update_settings '{"dao": "dao.sputnik.testnet", "regi
 
 # view if account is in escrow
 near view _escrow_account_ in_escrow '{"title": "some_account.testnet"}'
+near view _escrow_account_ get_underwriter '{"title": "some_account.testnet"}'
 
 # view the escrow settings
 near view _escrow_account_ get_settings

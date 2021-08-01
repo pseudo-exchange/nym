@@ -18,52 +18,12 @@ near_sdk::setup_alloc!();
 // TODO: Finalize amounts needed!
 // Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa Ⓝa - Batmannnnnnnn
 pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
-const ESCROW_STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
-// const NEW_ACCOUNT_STORAGE_AMOUNT: u128 = ONE_NEAR * 6;
-// const T_GAS: u64 = 1_000_000_000_000;
-// const MAX_GAS_FEE: u64 = 300 * T_GAS;
-// const NEW_ACCOUNT_GAS_FEE: u64 = 25 * T_GAS;
-// const DELETE_ACCOUNT_GAS_FEE: u64 = 25 * T_GAS;
-// const REGISTER_CALLBACK_GAS_FEE: u64 = 50 * T_GAS;
-// const DEED_NEW_GAS_FEE: u64 = 25 * T_GAS;
-const REGISTER_REGISTRAR_GAS_FEE: u64 = 50_000_000_000_000; // 50 Tgas
 const CLOSE_ESCROW_GAS_FEE: u64 = 50_000_000_000_000; // 50 Tgas
-// const DELETE_ACCOUNT_GAS_FEE: u64 = 5_000_000_000_000; // 5 Tgas
-// const REGISTER_CALLBACK_GAS_FEE: u64 = 20_000_000_000_000; // 20 Tgas
-// const NEW_ACCOUNT_GAS_FEE: u64 = 100_000_000_000_000;
-// const DEED_NEW_GAS_FEE: u64 = 100_000_000_000_000;
 
 #[derive(BorshStorageKey, BorshSerialize)]
 pub enum StorageKeys {
     Accounts,
     Tlas,
-}
-
-#[ext_contract(ext_self)]
-trait ExtSelf {
-    fn on_register_p1(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
-    fn on_register_p2(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
-    fn p2(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
-    fn p2a(&mut self, title: ValidAccountId) -> Promise;
-    fn on_register_p3(&mut self, title: ValidAccountId, underwriter: ValidAccountId) -> Promise;
-}
-
-#[ext_contract(ext_factory)]
-trait ExtAccountFactory {
-    fn create_account(
-        &mut self,
-        new_account_id: AccountId,
-        new_public_key: Base58PublicKey,
-    ) -> Promise;
-}
-
-#[ext_contract(ext_registrar)]
-trait ExtRegistrar {
-    fn register(
-        &mut self,
-        account_id: AccountId,
-        underwriter: AccountId,
-    );
 }
 
 #[ext_contract(ext_deed)]
@@ -141,6 +101,25 @@ impl Escrow {
         self.accounts.remove(&tmp_account_id);
     }
 
+    /// Responsible for bonding an account to a deed contract, where
+    /// escrow is the sole owner, and can only transfer ownership upon
+    /// close of title
+    ///
+    /// ```bash
+    /// near call _escrow_account_ register '{"underwriter": "some_other_account.testnet"}' --accountId youraccount_to_auction.testnet
+    /// ```
+    ///
+    #[payable]
+    pub fn register(&mut self, underwriter: AccountId) {
+        let acct = env::predecessor_account_id();
+        // Make sure this account isnt already in escrow
+        assert_ne!(self.accounts.contains_key(&acct), true, "Account already in escrow");
+
+        // Store the account in escrow
+        self.accounts.insert(&acct, &underwriter);
+        log!("Account {} is in escrow", &acct);
+    }
+
     // TODO: support TLAs
     /// The full realization of an escrow deed, where the account is
     /// transferred to the new owner OR the old owner.
@@ -172,40 +151,6 @@ impl Escrow {
         )
     }
 
-    /// Responsible for bonding an account to a deed contract, where
-    /// escrow is the sole owner, and can only transfer ownership upon
-    /// close of title
-    ///
-    /// ```bash
-    /// near call _escrow_account_ register '{"underwriter": "some_other_account.testnet", "registrar": true}' --accountId youraccount_to_auction.testnet
-    /// ```
-    ///
-    // NOTE: Currenly only possible if this escrow account has a public key with full access to account, otherwise deploy is not possible.
-    #[payable]
-    pub fn register(
-        &mut self,
-        underwriter: AccountId,
-        registrar: Option<bool>,
-    ) {
-        let acct = env::predecessor_account_id();
-        // Make sure this account isnt already in escrow
-        assert_ne!(self.accounts.contains_key(&acct), true, "Account already in escrow");
-
-        // Store the account in escrow
-        self.accounts.insert(&acct, &underwriter);
-        log!("Account {} is in escrow", &acct);
-
-        if registrar.is_some() && registrar.unwrap() == true {
-            ext_registrar::register(
-                acct,
-                underwriter,
-                &self.registrar,
-                ESCROW_STORAGE_COST,
-                REGISTER_REGISTRAR_GAS_FEE,
-            );
-        }
-    }
-
     /// Checks if an account is escrowed
     ///
     /// ```bash
@@ -213,6 +158,15 @@ impl Escrow {
     /// ```
     pub fn in_escrow(&self, title: ValidAccountId) -> bool {
         self.accounts.get(&title.to_string()).is_some()
+    }
+
+    /// Get the owner for a specific title
+    ///
+    /// ```bash
+    /// near view _escrow_account_ get_underwriter '{"title": "some_account.testnet"}'
+    /// ```
+    pub fn get_underwriter(&self, title: ValidAccountId) -> Option<AccountId> {
+        self.accounts.get(&title.to_string())
     }
 
     /// Gets the escrow settings
