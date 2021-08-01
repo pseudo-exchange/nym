@@ -81,17 +81,17 @@ pub struct Escrow {
     /// testnet factory: "testnet"
     /// mainnet factory: "near"
     /// mainnet TLA factory: "registrar"
-    factory: AccountId,
+    pub factory: AccountId,
 
     /// The account that handles all logic for auctions, bids & other actions
-    registrar: AccountId,
+    pub registrar: AccountId,
 
     // keeps track of the escrowed accounts
     tlas: LookupMap<AccountId, AccountId>,
     accounts: LookupMap<AccountId, AccountId>,
 
     // Optional
-    dao: Option<AccountId>,
+    pub dao: Option<AccountId>,
 
     // TODO: setup DAO whitelists and params for TLAs
 }
@@ -141,6 +141,7 @@ impl Escrow {
         self.accounts.remove(&tmp_account_id);
     }
 
+    // TODO: support TLAs
     /// The full realization of an escrow deed, where the account is
     /// transferred to the new owner OR the old owner.
     /// If the account was registered with registrar, then we must check the signer.
@@ -205,13 +206,30 @@ impl Escrow {
         }
     }
 
-    /// Gets the data payload of a single task by hash
+    /// Checks if an account is escrowed
     ///
     /// ```bash
     /// near view _escrow_account_ in_escrow '{"title": "some_account.testnet"}'
     /// ```
     pub fn in_escrow(&self, title: ValidAccountId) -> bool {
         self.accounts.get(&title.to_string()).is_some()
+    }
+
+    /// Gets the escrow settings
+    ///
+    /// ```bash
+    /// near view _escrow_account_ get_settings
+    /// ```
+    pub fn get_settings(&self) -> (
+        AccountId,
+        AccountId,
+        Option<AccountId>,
+    ) {
+        (
+            self.registrar.clone(),
+            self.factory.clone(),
+            self.dao.clone(),
+        )
     }
 
     /// change the contract basic parameters, in case of needing to upgrade
@@ -234,6 +252,11 @@ impl Escrow {
         if dao.is_some() { self.dao = Some(dao.unwrap().to_string()); }
         if factory.is_some() { self.factory = factory.unwrap().to_string(); }
         if registrar.is_some() { self.registrar = registrar.unwrap().to_string(); }
+    }
+
+    /// Returns semver of this contract.
+    pub fn version(&self) -> String {
+        env!("CARGO_PKG_VERSION").to_string()
     }
 }
 
@@ -294,7 +317,7 @@ mod tests {
         context = get_context(accounts(3), accounts(2), accounts(2), Some(false));
         testing_env!(context.build());
 
-        contract.register(accounts(2));
+        contract.register(accounts(2).to_string(), Some(true));
     }
 
     // #[test]
@@ -321,7 +344,7 @@ mod tests {
         let context2 = get_context(accounts(3), accounts(2), accounts(2), Some(false));
         testing_env!(context2.build());
 
-        contract.register(accounts(2));
+        contract.register(accounts(2).to_string(), Some(false));
 
         let context3 = get_context(accounts(3), accounts(2), accounts(2), Some(true));
         testing_env!(context3.build());
