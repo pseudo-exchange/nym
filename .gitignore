@@ -121,3 +121,9 @@ neardev
 **/*.rs.bk
 
 .idea
+
+
+
+
+# TODO: Add this back once ready!
+tests
