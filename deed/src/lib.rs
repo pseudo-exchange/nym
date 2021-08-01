@@ -14,13 +14,14 @@ use near_sdk::{
 near_sdk::setup_alloc!();
 
 // TODO: Adjust these to minimums
-const STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
+const DEED_STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
+const ESCROW_STORAGE_COST: u128 = 2_000_000_000_000_000_000_000;
 const REGISTER_GAS_FEE: u64 = 50_000_000_000_000; // 50 Tgas
 const CALLBACK_GAS_FEE: u64 = 20_000_000_000_000; // 20 Tgas
 
 #[ext_contract(ext_escrow)]
 pub trait ExtEscrow {
-    fn register(&mut self, registrar: Option<ValidAccountId>);
+    fn register(&mut self, underwriter: AccountId, registrar: Option<bool>);
 }
 
 #[ext_contract(ext_self)]
@@ -49,22 +50,23 @@ impl Deed {
     pub fn new(
         underwriter: ValidAccountId,
         escrow: ValidAccountId,
-        registrar: Option<ValidAccountId>,
+        registrar: Option<bool>,
     ) -> Self {
         assert_eq!(env::signer_account_id(), env::current_account_id(), "Signer must have original ownership");
         assert_eq!(env::predecessor_account_id(), env::current_account_id(), "Signer must have original ownership");
 
         // transfer any remaining balance to underwriter
         // transfers ALL balance except whats needed for contract storage
-        let remaining_balance = core::cmp::max(env::account_balance() - STORAGE_COST, STORAGE_COST);
+        let remaining_balance = core::cmp::max(env::account_balance() - DEED_STORAGE_COST, DEED_STORAGE_COST);
         Promise::new(underwriter.to_string())
             .transfer(remaining_balance);
 
         // register with escrow contract
         ext_escrow::register(
+            underwriter.to_string(),
             registrar,
             &escrow.to_string(),
-            0,
+            ESCROW_STORAGE_COST,
             REGISTER_GAS_FEE,
         );
 

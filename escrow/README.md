@@ -28,11 +28,7 @@ Register a new title by the following workflow (under the hood):
 2. create the same acount again, assigning escrow as owner
 3. deploy a deed contract to new account, assigning original owner to have rights to revert ownership via escrow proxy.
 
-#### Revert Title
-
-Proxy to deed revert_ownership function
-
-#### Close Escrow
+#### Clear Escrow
 
 Proxy to deed transfer_ownership function
 
@@ -42,18 +38,15 @@ Requires [near cli]()
 
 ```bash
 # Init
-near deploy --wasmFile res/escrow.wasm --initFunction new --initArgs '{"factory_id": "testnet", "auction_id": "auction.nym.testnet", "pk": "escrow_public_key"}' --accountId escrow_account.testnet
+near deploy --wasmFile res/escrow.wasm --initFunction new --initArgs '{"factory": "testnet", "registrar": "auction.nym.testnet", "dao": "dao.sputnik.testnet"}' --accountId escrow_account.testnet
 
-# Start deed
-near call _escrow_account_ register '{"underwriter": "some_other_account.testnet"}' --accountId youraccount_to_auction.testnet
-
-# Cancel deed
-near call _escrow_account_ revert_title '{"title": "some_account.testnet"}' --accountId youraccount.testnet
+# Start deed (but this is actually called at DEED deploy)
+near call _escrow_account_ register '{"underwriter": "some_other_account.testnet", "registrar": true}' --accountId youraccount_to_auction.testnet
 
 # Close deed
 near call _escrow_account_ close_escrow '{"auction_id": "some_account.testnet", "new_key": "ed25591:PK_HERE"}' --accountId youraccount.testnet
 
-# Update Settings
-near call _escrow_account_ update_escrow_settings '{"auction_id": "auction2.testnet"}' --accountId auction1.testnet
+# Update Settings (only via DAO)
+near call _escrow_account_ update_settings '{"dao": "dao.sputnik.testnet", "registrar": "registrar.alias.testnet"}' --accountId dao.sputnik.testnet
 
 ```
